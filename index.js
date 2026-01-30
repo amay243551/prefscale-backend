@@ -72,89 +72,114 @@ app.get("/", (req, res) => {
 
 /* ================= SIGNUP (USER ONLY) ================= */
 app.post("/api/signup", async (req, res) => {
-  const { name, company, email, password } = req.body;
+  try {
+    const { name, company, email, password } = req.body;
 
-  if (!name || !company || !email || !password)
-    return res.status(400).json({ message: "All fields required" });
+    if (!name || !company || !email || !password) {
+      return res.status(400).json({ message: "All fields required" });
+    }
 
-  const exists = await User.findOne({ email });
-  if (exists) return res.status(400).json({ message: "User exists" });
+    const exists = await User.findOne({ email });
+    if (exists) {
+      return res.status(400).json({ message: "User exists" });
+    }
 
-  const hashed = await bcrypt.hash(password, 10);
+    const hashed = await bcrypt.hash(password, 10);
 
-  await User.create({
-    name,
-    company,
-    email,
-    password: hashed,
-  });
+    await User.create({
+      name,
+      company,
+      email,
+      password: hashed,
+    });
 
-  res.json({ message: "Signup successful" });
+    res.json({ message: "Signup successful" });
+  } catch (err) {
+    console.error("Signup error:", err);
+    res.status(500).json({ message: "Server error" });
+  }
 });
 
 /* ================= LOGIN (ADMIN + USER) ================= */
 app.post("/api/login", async (req, res) => {
-  const { email, password } = req.body;
+  try {
+    const { email, password } = req.body;
 
-  /* ===== ADMIN LOGIN ===== */
-  if (
-    email === process.env.ADMIN_EMAIL &&
-    password === process.env.ADMIN_PASSWORD
-  ) {
+    /* ===== ADMIN LOGIN ===== */
+    if (
+      email === process.env.ADMIN_EMAIL &&
+      password === process.env.ADMIN_PASSWORD
+    ) {
+      const token = jwt.sign(
+        { role: "admin", email },
+        JWT_SECRET,
+        { expiresIn: "1d" }
+      );
+
+      return res.json({
+        token,
+        role: "admin",
+        name: "Admin",
+      });
+    }
+
+    /* ===== USER LOGIN ===== */
+    const user = await User.findOne({ email });
+    if (!user) {
+      return res.status(400).json({ message: "Invalid credentials" });
+    }
+
+    const isMatch = await bcrypt.compare(password, user.password);
+    if (!isMatch) {
+      return res.status(400).json({ message: "Invalid credentials" });
+    }
+
     const token = jwt.sign(
-      { role: "admin", email },
+      { id: user._id, role: "user", email: user.email },
       JWT_SECRET,
       { expiresIn: "1d" }
     );
 
     return res.json({
       token,
-      role: "admin",
-      name: "Admin",
+      role: "user",
+      name: user.name,
     });
+  } catch (err) {
+    console.error("Login error:", err);
+    res.status(500).json({ message: "Server error" });
   }
-
-  /* ===== USER LOGIN ===== */
-  const user = await User.findOne({ email });
-  if (!user) return res.status(400).json({ message: "Invalid credentials" });
-
-  const ok = await bcrypt.compare(password, user.password);
-  if (!ok) return res.status(400).json({ message: "Invalid credentials" });
-
-  const token = jwt.sign(
-    { id: user._id, role: "user" },
-    JWT_SECRET,
-    { expiresIn: "1d" }
-  );
-
-  res.json({
-    token,
-    role: "user",
-    name: user.name,
-  });
 });
 
 /* ================= CONTACT ================= */
 app.post("/api/contact", async (req, res) => {
-  await Contact.create(req.body);
-  res.json({ message: "Message sent ✅" });
+  try {
+    await Contact.create(req.body);
+    res.json({ message: "Message sent ✅" });
+  } catch (err) {
+    console.error("Contact error:", err);
+    res.status(500).json({ message: "Server error" });
+  }
 });
 
 /* ================= ADMIN MIDDLEWARE ================= */
 const adminOnly = (req, res, next) => {
   try {
     const auth = req.headers.authorization;
-    if (!auth) return res.status(401).json({ message: "No token" });
+    if (!auth) {
+      return res.status(401).json({ message: "No token" });
+    }
 
     const token = auth.split(" ")[1];
     const decoded = jwt.verify(token, JWT_SECRET);
 
-    if (decoded.role !== "admin")
+    if (decoded.role !== "admin") {
       return res.status(403).json({ message: "Admin only" });
+    }
 
     req.user = decoded;
     next();
-  } catch {
+  } catch (err) {
     return res.status(401).json({ message: "Invalid token" });
   }
 };
@@ -174,26 +199,37 @@ app.post(
   adminOnly,
   upload.single("pdf"),
   async (req, res) => {
-    const { title, description } = req.body;
+    try {
+      const { title, description } = req.body;
 
-    if (!req.file)
-      return res.status(400).json({ message: "PDF required" });
+      if (!req.file) {
+        return res.status(400).json({ message: "PDF required" });
+      }
 
-    await Blog.create({
-      title,
-      description,
-      pdf: req.file.filename,
-      uploadedBy: "admin",
-    });
+      await Blog.create({
+        title,
+        description,
+        pdf: req.file.filename,
+        uploadedBy: "admin",
+      });
 
-    res.json({ message: "Blog uploaded successfully ✅" });
+      res.json({ message: "Blog uploaded successfully ✅" });
+    } catch (err) {
+      console.error("Blog upload error:", err);
+      res.status(500).json({ message: "Server error" });
+    }
   }
 );
 
 /* ================= GET BLOGS (PUBLIC) ================= */
 app.get("/api/blogs", async (req, res) => {
-  const blogs = await Blog.find().sort({ createdAt: -1 });
-  res.json(blogs);
+  try {
+    const blogs = await Blog.find().sort({ createdAt: -1 });
+    res.json(blogs);
+  } catch (err) {
+    console.error("Fetch blogs error:", err);
+    res.status(500).json({ message: "Server error" });
+  }
 });
 
 /* ================= START ================= */

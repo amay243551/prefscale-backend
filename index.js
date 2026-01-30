@@ -29,13 +29,18 @@ mongoose
   .then(() => console.log("MongoDB connected ✅"))
   .catch((err) => console.error("Mongo error ❌", err));
 
-/* ================= USER SCHEMA ================= */
+/* ================= USER SCHEMA (FIXED) ================= */
 const userSchema = new mongoose.Schema(
   {
     name: String,
     company: String,
     email: { type: String, unique: true },
     password: String,
+    role: {
+      type: String,
+      enum: ["user", "admin"],
+      default: "user",
+    },
   },
   { timestamps: true }
 );
@@ -70,7 +75,7 @@ app.get("/", (req, res) => {
   res.send("Prefscale Backend Live 🚀");
 });
 
-/* ================= SIGNUP (USER ONLY) ================= */
+/* ================= SIGNUP (USER ONLY – FIXED) ================= */
 app.post("/api/signup", async (req, res) => {
   try {
     const { name, company, email, password } = req.body;
@@ -86,21 +91,25 @@ app.post("/api/signup", async (req, res) => {
 
     const hashed = await bcrypt.hash(password, 10);
 
-    await User.create({
+    const user = await User.create({
       name,
       company,
       email,
       password: hashed,
+      role: "user",
     });
 
-    res.json({ message: "Signup successful" });
+    return res.json({
+      message: "Signup successful",
+      role: user.role,
+    });
   } catch (err) {
     console.error("Signup error:", err);
-    res.status(500).json({ message: "Server error" });
+    return res.status(500).json({ message: "Server error" });
   }
 });
 
-/* ================= LOGIN (ADMIN + USER) ================= */
+/* ================= LOGIN (ADMIN + USER – FIXED) ================= */
 app.post("/api/login", async (req, res) => {
   try {
     const { email, password } = req.body;
@@ -135,19 +144,23 @@ app.post("/api/login", async (req, res) => {
     }
 
     const token = jwt.sign(
-      { id: user._id, role: "user", email: user.email },
+      {
+        id: user._id,
+        role: user.role,
+        email: user.email,
+      },
       JWT_SECRET,
       { expiresIn: "1d" }
     );
 
     return res.json({
       token,
-      role: "user",
+      role: user.role,
       name: user.name,
     });
   } catch (err) {
     console.error("Login error:", err);
-    res.status(500).json({ message: "Server error" });
+    return res.status(500).json({ message: "Server error" });
   }
 });
 

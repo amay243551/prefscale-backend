@@ -51,7 +51,12 @@ const blogSchema = new mongoose.Schema(
   {
     title: String,
     description: String,
-    file: String, // can be pdf / doc / docx
+    pdf: String,
+    category: {
+      type: String,
+      enum: ["foundations", "deep"],
+      required: true,
+    },
     uploadedBy: String,
   },
   { timestamps: true }

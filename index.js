@@ -29,7 +29,7 @@ mongoose
   .then(() => console.log("MongoDB connected ✅"))
   .catch((err) => console.error("Mongo error ❌", err));
 
-/* ================= USER SCHEMA (FIXED) ================= */
+/* ================= USER SCHEMA ================= */
 const userSchema = new mongoose.Schema(
   {
     name: String,
@@ -51,7 +51,7 @@ const blogSchema = new mongoose.Schema(
   {
     title: String,
     description: String,
-    pdf: String,
+    file: String, // can be pdf / doc / docx
     uploadedBy: String,
   },
   { timestamps: true }
@@ -75,7 +75,7 @@ app.get("/", (req, res) => {
   res.send("Prefscale Backend Live 🚀");
 });
 
-/* ================= SIGNUP (USER ONLY – FIXED) ================= */
+/* ================= SIGNUP (USER ONLY) ================= */
 app.post("/api/signup", async (req, res) => {
   try {
     const { name, company, email, password } = req.body;
@@ -99,17 +99,17 @@ app.post("/api/signup", async (req, res) => {
       role: "user",
     });
 
-    return res.json({
+    res.json({
       message: "Signup successful",
       role: user.role,
     });
   } catch (err) {
     console.error("Signup error:", err);
-    return res.status(500).json({ message: "Server error" });
+    res.status(500).json({ message: "Server error" });
   }
 });
 
-/* ================= LOGIN (ADMIN + USER – FIXED) ================= */
+/* ================= LOGIN (ADMIN + USER) ================= */
 app.post("/api/login", async (req, res) => {
   try {
     const { email, password } = req.body;
@@ -138,29 +138,25 @@ app.post("/api/login", async (req, res) => {
       return res.status(400).json({ message: "Invalid credentials" });
     }
 
-    const isMatch = await bcrypt.compare(password, user.password);
-    if (!isMatch) {
+    const ok = await bcrypt.compare(password, user.password);
+    if (!ok) {
       return res.status(400).json({ message: "Invalid credentials" });
     }
 
     const token = jwt.sign(
-      {
-        id: user._id,
-        role: user.role,
-        email: user.email,
-      },
+      { id: user._id, role: user.role, email: user.email },
       JWT_SECRET,
       { expiresIn: "1d" }
     );
 
-    return res.json({
+    res.json({
       token,
       role: user.role,
       name: user.name,
     });
   } catch (err) {
     console.error("Login error:", err);
-    return res.status(500).json({ message: "Server error" });
+    res.status(500).json({ message: "Server error" });
   }
 });
 
@@ -179,9 +175,7 @@ app.post("/api/contact", async (req, res) => {
 const adminOnly = (req, res, next) => {
   try {
     const auth = req.headers.authorization;
-    if (!auth) {
-      return res.status(401).json({ message: "No token" });
-    }
+    if (!auth) return res.status(401).json({ message: "No token" });
 
     const token = auth.split(" ")[1];
     const decoded = jwt.verify(token, JWT_SECRET);
@@ -192,41 +186,59 @@ const adminOnly = (req, res, next) => {
 
     req.user = decoded;
     next();
-  } catch (err) {
+  } catch {
     return res.status(401).json({ message: "Invalid token" });
   }
 };
 
-/* ================= FILE UPLOAD ================= */
+/* ================= FILE UPLOAD (PDF + WORD) ================= */
 const storage = multer.diskStorage({
   destination: "uploads/",
   filename: (_, file, cb) => {
     cb(null, Date.now() + "-" + file.originalname);
   },
 });
-const upload = multer({ storage });
+
+const upload = multer({
+  storage,
+  fileFilter: (req, file, cb) => {
+    const allowed = [
+      "application/pdf",
+      "application/msword",
+      "application/vnd.openxmlformats-officedocument.wordprocessingml.document",
+    ];
+
+    if (!allowed.includes(file.mimetype)) {
+      return cb(new Error("Only PDF or Word files allowed"));
+    }
+    cb(null, true);
+  },
+});
 
 /* ================= ADMIN BLOG UPLOAD ================= */
 app.post(
   "/api/admin/blog",
   adminOnly,
-  upload.single("pdf"),
+  upload.single("file"), // frontend should send `file`
   async (req, res) => {
     try {
       const { title, description } = req.body;
 
       if (!req.file) {
-        return res.status(400).json({ message: "PDF required" });
+        return res.status(400).json({ message: "File required" });
       }
 
-      await Blog.create({
+      const blog = await Blog.create({
         title,
         description,
-        pdf: req.file.filename,
+        file: req.file.filename,
         uploadedBy: "admin",
       });
 
-      res.json({ message: "Blog uploaded successfully ✅" });
+      res.json({
+        message: "Blog uploaded successfully ✅",
+        blog,
+      });
     } catch (err) {
       console.error("Blog upload error:", err);
       res.status(500).json({ message: "Server error" });

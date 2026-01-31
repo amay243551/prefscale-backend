@@ -46,12 +46,12 @@ const userSchema = new mongoose.Schema(
 );
 const User = mongoose.model("User", userSchema);
 
-/* ================= BLOG SCHEMA ================= */
+/* ================= BLOG SCHEMA (FIXED) ================= */
 const blogSchema = new mongoose.Schema(
   {
     title: String,
     description: String,
-    pdf: String,
+    pdf: String, // ✅ single field for file
     category: {
       type: String,
       enum: ["foundations", "deep"],
@@ -80,7 +80,7 @@ app.get("/", (req, res) => {
   res.send("Prefscale Backend Live 🚀");
 });
 
-/* ================= SIGNUP (USER ONLY) ================= */
+/* ================= SIGNUP ================= */
 app.post("/api/signup", async (req, res) => {
   try {
     const { name, company, email, password } = req.body;
@@ -104,49 +104,34 @@ app.post("/api/signup", async (req, res) => {
       role: "user",
     });
 
-    res.json({
-      message: "Signup successful",
-      role: user.role,
-    });
+    res.json({ message: "Signup successful", role: user.role });
   } catch (err) {
     console.error("Signup error:", err);
     res.status(500).json({ message: "Server error" });
   }
 });
 
-/* ================= LOGIN (ADMIN + USER) ================= */
+/* ================= LOGIN ================= */
 app.post("/api/login", async (req, res) => {
   try {
     const { email, password } = req.body;
 
-    /* ===== ADMIN LOGIN ===== */
     if (
       email === process.env.ADMIN_EMAIL &&
       password === process.env.ADMIN_PASSWORD
     ) {
-      const token = jwt.sign(
-        { role: "admin", email },
-        JWT_SECRET,
-        { expiresIn: "1d" }
-      );
-
-      return res.json({
-        token,
-        role: "admin",
-        name: "Admin",
+      const token = jwt.sign({ role: "admin", email }, JWT_SECRET, {
+        expiresIn: "1d",
       });
+
+      return res.json({ token, role: "admin", name: "Admin" });
     }
 
-    /* ===== USER LOGIN ===== */
     const user = await User.findOne({ email });
-    if (!user) {
-      return res.status(400).json({ message: "Invalid credentials" });
-    }
+    if (!user) return res.status(400).json({ message: "Invalid credentials" });
 
     const ok = await bcrypt.compare(password, user.password);
-    if (!ok) {
-      return res.status(400).json({ message: "Invalid credentials" });
-    }
+    if (!ok) return res.status(400).json({ message: "Invalid credentials" });
 
     const token = jwt.sign(
       { id: user._id, role: user.role, email: user.email },
@@ -154,29 +139,14 @@ app.post("/api/login", async (req, res) => {
       { expiresIn: "1d" }
     );
 
-    res.json({
-      token,
-      role: user.role,
-      name: user.name,
-    });
+    res.json({ token, role: user.role, name: user.name });
   } catch (err) {
     console.error("Login error:", err);
     res.status(500).json({ message: "Server error" });
   }
 });
 
-/* ================= CONTACT ================= */
-app.post("/api/contact", async (req, res) => {
-  try {
-    await Contact.create(req.body);
-    res.json({ message: "Message sent ✅" });
-  } catch (err) {
-    console.error("Contact error:", err);
-    res.status(500).json({ message: "Server error" });
-  }
-});
-
-/* ================= ADMIN MIDDLEWARE ================= */
+/* ================= ADMIN AUTH ================= */
 const adminOnly = (req, res, next) => {
   try {
     const auth = req.headers.authorization;
@@ -185,18 +155,17 @@ const adminOnly = (req, res, next) => {
     const token = auth.split(" ")[1];
     const decoded = jwt.verify(token, JWT_SECRET);
 
-    if (decoded.role !== "admin") {
+    if (decoded.role !== "admin")
       return res.status(403).json({ message: "Admin only" });
-    }
 
     req.user = decoded;
     next();
   } catch {
-    return res.status(401).json({ message: "Invalid token" });
+    res.status(401).json({ message: "Invalid token" });
   }
 };
 
-/* ================= FILE UPLOAD (PDF + WORD) ================= */
+/* ================= FILE UPLOAD ================= */
 const storage = multer.diskStorage({
   destination: "uploads/",
   filename: (_, file, cb) => {
@@ -206,13 +175,12 @@ const storage = multer.diskStorage({
 
 const upload = multer({
   storage,
-  fileFilter: (req, file, cb) => {
+  fileFilter: (_, file, cb) => {
     const allowed = [
       "application/pdf",
       "application/msword",
       "application/vnd.openxmlformats-officedocument.wordprocessingml.document",
     ];
-
     if (!allowed.includes(file.mimetype)) {
       return cb(new Error("Only PDF or Word files allowed"));
     }
@@ -220,30 +188,30 @@ const upload = multer({
   },
 });
 
-/* ================= ADMIN BLOG UPLOAD ================= */
+/* ================= ADMIN BLOG UPLOAD (FIXED) ================= */
 app.post(
   "/api/admin/blog",
   adminOnly,
-  upload.single("file"), // frontend should send `file`
+  upload.single("file"),
   async (req, res) => {
     try {
-      const { title, description } = req.body;
+      const { title, description, category } = req.body;
 
-      if (!req.file) {
-        return res.status(400).json({ message: "File required" });
+      if (!req.file || !category) {
+        return res
+          .status(400)
+          .json({ message: "File and category required" });
       }
 
       const blog = await Blog.create({
         title,
         description,
-        file: req.file.filename,
+        category, // ✅ VERY IMPORTANT
+        pdf: req.file.filename,
         uploadedBy: "admin",
       });
 
-      res.json({
-        message: "Blog uploaded successfully ✅",
-        blog,
-      });
+      res.json({ message: "Blog uploaded successfully ✅", blog });
     } catch (err) {
       console.error("Blog upload error:", err);
       res.status(500).json({ message: "Server error" });
@@ -251,10 +219,14 @@ app.post(
   }
 );
 
-/* ================= GET BLOGS (PUBLIC) ================= */
+/* ================= GET BLOGS BY CATEGORY ================= */
 app.get("/api/blogs", async (req, res) => {
   try {
-    const blogs = await Blog.find().sort({ createdAt: -1 });
+    const { category } = req.query;
+
+    const filter = category ? { category } : {};
+    const blogs = await Blog.find(filter).sort({ createdAt: -1 });
+
     res.json(blogs);
   } catch (err) {
     console.error("Fetch blogs error:", err);

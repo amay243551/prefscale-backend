@@ -5,6 +5,7 @@ const bcrypt = require("bcryptjs");
 const jwt = require("jsonwebtoken");
 const mongoose = require("mongoose");
 const multer = require("multer");
+const cloudinary = require("cloudinary").v2;
 require("dotenv").config();
 
 const app = express();
@@ -18,16 +19,21 @@ app.use(
   })
 );
 app.use(express.json());
-app.use("/uploads", express.static("uploads"));
 
 const PORT = process.env.PORT || 5000;
 const JWT_SECRET = process.env.JWT_SECRET;
+
+/* ================= CLOUDINARY ================= */
+cloudinary.config({
+  cloud_name: process.env.CLOUDINARY_CLOUD_NAME,
+  api_key: process.env.CLOUDINARY_API_KEY,
+  api_secret: process.env.CLOUDINARY_API_SECRET,
+});
 
 /* ================= MONGODB ================= */
 mongoose
   .connect(process.env.MONGO_URI, {
     serverSelectionTimeoutMS: 30000,
-    socketTimeoutMS: 45000,
   })
   .then(() => console.log("MongoDB connected ✅"))
   .catch((err) => console.error("Mongo error ❌", err));
@@ -49,12 +55,12 @@ const userSchema = new mongoose.Schema(
 );
 const User = mongoose.model("User", userSchema);
 
-/* ================= BLOG SCHEMA (FIXED) ================= */
+/* ================= BLOG SCHEMA ================= */
 const blogSchema = new mongoose.Schema(
   {
     title: String,
     description: String,
-    pdf: String, // ✅ single field for file
+    fileUrl: String, // ✅ CLOUDINARY URL
     category: {
       type: String,
       enum: ["foundations", "deep"],
@@ -65,18 +71,6 @@ const blogSchema = new mongoose.Schema(
   { timestamps: true }
 );
 const Blog = mongoose.model("Blog", blogSchema);
-
-/* ================= CONTACT ================= */
-const contactSchema = new mongoose.Schema(
-  {
-    name: String,
-    company: String,
-    email: String,
-    message: String,
-  },
-  { timestamps: true }
-);
-const Contact = mongoose.model("Contact", contactSchema);
 
 /* ================= ROOT ================= */
 app.get("/", (req, res) => {
@@ -93,9 +87,7 @@ app.post("/api/signup", async (req, res) => {
     }
 
     const exists = await User.findOne({ email });
-    if (exists) {
-      return res.status(400).json({ message: "User exists" });
-    }
+    if (exists) return res.status(400).json({ message: "User exists" });
 
     const hashed = await bcrypt.hash(password, 10);
 
@@ -104,7 +96,6 @@ app.post("/api/signup", async (req, res) => {
       company,
       email,
       password: hashed,
-      role: "user",
     });
 
     res.json({ message: "Signup successful", role: user.role });
@@ -119,17 +110,19 @@ app.post("/api/login", async (req, res) => {
   try {
     const { email, password } = req.body;
 
+    /* ADMIN LOGIN */
     if (
       email === process.env.ADMIN_EMAIL &&
       password === process.env.ADMIN_PASSWORD
     ) {
-      const token = jwt.sign({ role: "admin", email }, JWT_SECRET, {
+      const token = jwt.sign({ role: "admin" }, JWT_SECRET, {
         expiresIn: "1d",
       });
 
       return res.json({ token, role: "admin", name: "Admin" });
     }
 
+    /* USER LOGIN */
     const user = await User.findOne({ email });
     if (!user) return res.status(400).json({ message: "Invalid credentials" });
 
@@ -137,7 +130,7 @@ app.post("/api/login", async (req, res) => {
     if (!ok) return res.status(400).json({ message: "Invalid credentials" });
 
     const token = jwt.sign(
-      { id: user._id, role: user.role, email: user.email },
+      { id: user._id, role: user.role },
       JWT_SECRET,
       { expiresIn: "1d" }
     );
@@ -158,40 +151,20 @@ const adminOnly = (req, res, next) => {
     const token = auth.split(" ")[1];
     const decoded = jwt.verify(token, JWT_SECRET);
 
-    if (decoded.role !== "admin")
+    if (decoded.role !== "admin") {
       return res.status(403).json({ message: "Admin only" });
+    }
 
-    req.user = decoded;
     next();
   } catch {
     res.status(401).json({ message: "Invalid token" });
   }
 };
 
-/* ================= FILE UPLOAD ================= */
-const storage = multer.diskStorage({
-  destination: "uploads/",
-  filename: (_, file, cb) => {
-    cb(null, Date.now() + "-" + file.originalname);
-  },
-});
+/* ================= MULTER (MEMORY) ================= */
+const upload = multer({ storage: multer.memoryStorage() });
 
-const upload = multer({
-  storage,
-  fileFilter: (_, file, cb) => {
-    const allowed = [
-      "application/pdf",
-      "application/msword",
-      "application/vnd.openxmlformats-officedocument.wordprocessingml.document",
-    ];
-    if (!allowed.includes(file.mimetype)) {
-      return cb(new Error("Only PDF or Word files allowed"));
-    }
-    cb(null, true);
-  },
-});
-
-/* ================= ADMIN BLOG UPLOAD (FIXED) ================= */
+/* ================= ADMIN BLOG UPLOAD ================= */
 app.post(
   "/api/admin/blog",
   adminOnly,
@@ -206,15 +179,34 @@ app.post(
           .json({ message: "File and category required" });
       }
 
-      const blog = await Blog.create({
-        title,
-        description,
-        category, // ✅ VERY IMPORTANT
-        pdf: req.file.filename,
-        uploadedBy: "admin",
-      });
+      /* UPLOAD TO CLOUDINARY */
+      const result = await cloudinary.uploader.upload_stream(
+        {
+          resource_type: "raw",
+          folder: "prefscale_blogs",
+        },
+        async (error, uploadResult) => {
+          if (error) {
+            console.error(error);
+            return res.status(500).json({ message: "Upload failed" });
+          }
 
-      res.json({ message: "Blog uploaded successfully ✅", blog });
+          const blog = await Blog.create({
+            title,
+            description,
+            category,
+            fileUrl: uploadResult.secure_url,
+            uploadedBy: "admin",
+          });
+
+          res.json({
+            message: "Blog uploaded successfully ✅",
+            blog,
+          });
+        }
+      );
+
+      result.end(req.file.buffer);
     } catch (err) {
       console.error("Blog upload error:", err);
       res.status(500).json({ message: "Server error" });
@@ -222,14 +214,13 @@ app.post(
   }
 );
 
-/* ================= GET BLOGS BY CATEGORY ================= */
+/* ================= GET BLOGS ================= */
 app.get("/api/blogs", async (req, res) => {
   try {
     const { category } = req.query;
-
     const filter = category ? { category } : {};
-    const blogs = await Blog.find(filter).sort({ createdAt: -1 });
 
+    const blogs = await Blog.find(filter).sort({ createdAt: -1 });
     res.json(blogs);
   } catch (err) {
     console.error("Fetch blogs error:", err);

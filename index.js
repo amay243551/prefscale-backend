@@ -5,30 +5,20 @@ const bcrypt = require("bcryptjs");
 const jwt = require("jsonwebtoken");
 const mongoose = require("mongoose");
 const multer = require("multer");
-const cloudinary = require("cloudinary").v2;
+const path = require("path");
 require("dotenv").config();
 
 const app = express();
 
 /* ================= MIDDLEWARE ================= */
-app.use(
-  cors({
-    origin: "*",
-    methods: ["GET", "POST"],
-    allowedHeaders: ["Content-Type", "Authorization"],
-  })
-);
+app.use(cors());
 app.use(express.json());
+
+// 🔥 IMPORTANT: serve uploads correctly
+app.use("/uploads", express.static(path.join(__dirname, "uploads")));
 
 const PORT = process.env.PORT || 5000;
 const JWT_SECRET = process.env.JWT_SECRET;
-
-/* ================= CLOUDINARY ================= */
-cloudinary.config({
-  cloud_name: process.env.CLOUDINARY_CLOUD_NAME,
-  api_key: process.env.CLOUDINARY_API_KEY,
-  api_secret: process.env.CLOUDINARY_API_SECRET,
-});
 
 /* ================= MONGODB ================= */
 mongoose
@@ -45,11 +35,7 @@ const userSchema = new mongoose.Schema(
     company: String,
     email: { type: String, unique: true },
     password: String,
-    role: {
-      type: String,
-      enum: ["user", "admin"],
-      default: "user",
-    },
+    role: { type: String, enum: ["user", "admin"], default: "user" },
   },
   { timestamps: true }
 );
@@ -60,7 +46,7 @@ const blogSchema = new mongoose.Schema(
   {
     title: String,
     description: String,
-    fileUrl: String, // ✅ CLOUDINARY URL
+    pdf: String, // filename
     category: {
       type: String,
       enum: ["foundations", "deep"],
@@ -110,7 +96,7 @@ app.post("/api/login", async (req, res) => {
   try {
     const { email, password } = req.body;
 
-    /* ADMIN LOGIN */
+    // ADMIN LOGIN (FROM .env)
     if (
       email === process.env.ADMIN_EMAIL &&
       password === process.env.ADMIN_PASSWORD
@@ -119,10 +105,14 @@ app.post("/api/login", async (req, res) => {
         expiresIn: "1d",
       });
 
-      return res.json({ token, role: "admin", name: "Admin" });
+      return res.json({
+        token,
+        role: "admin",
+        name: "Admin",
+      });
     }
 
-    /* USER LOGIN */
+    // USER LOGIN
     const user = await User.findOne({ email });
     if (!user) return res.status(400).json({ message: "Invalid credentials" });
 
@@ -142,7 +132,7 @@ app.post("/api/login", async (req, res) => {
   }
 });
 
-/* ================= ADMIN AUTH ================= */
+/* ================= ADMIN MIDDLEWARE ================= */
 const adminOnly = (req, res, next) => {
   try {
     const auth = req.headers.authorization;
@@ -151,18 +141,24 @@ const adminOnly = (req, res, next) => {
     const token = auth.split(" ")[1];
     const decoded = jwt.verify(token, JWT_SECRET);
 
-    if (decoded.role !== "admin") {
+    if (decoded.role !== "admin")
       return res.status(403).json({ message: "Admin only" });
-    }
 
     next();
   } catch {
-    res.status(401).json({ message: "Invalid token" });
+    return res.status(401).json({ message: "Invalid token" });
   }
 };
 
-/* ================= MULTER (MEMORY) ================= */
-const upload = multer({ storage: multer.memoryStorage() });
+/* ================= FILE UPLOAD ================= */
+const storage = multer.diskStorage({
+  destination: "uploads/",
+  filename: (_, file, cb) => {
+    cb(null, Date.now() + "-" + file.originalname);
+  },
+});
+
+const upload = multer({ storage });
 
 /* ================= ADMIN BLOG UPLOAD ================= */
 app.post(
@@ -179,34 +175,15 @@ app.post(
           .json({ message: "File and category required" });
       }
 
-      /* UPLOAD TO CLOUDINARY */
-      const result = await cloudinary.uploader.upload_stream(
-        {
-          resource_type: "raw",
-          folder: "prefscale_blogs",
-        },
-        async (error, uploadResult) => {
-          if (error) {
-            console.error(error);
-            return res.status(500).json({ message: "Upload failed" });
-          }
+      const blog = await Blog.create({
+        title,
+        description,
+        category,
+        pdf: req.file.filename,
+        uploadedBy: "admin",
+      });
 
-          const blog = await Blog.create({
-            title,
-            description,
-            category,
-            fileUrl: uploadResult.secure_url,
-            uploadedBy: "admin",
-          });
-
-          res.json({
-            message: "Blog uploaded successfully ✅",
-            blog,
-          });
-        }
-      );
-
-      result.end(req.file.buffer);
+      res.json({ message: "Blog uploaded successfully ✅", blog });
     } catch (err) {
       console.error("Blog upload error:", err);
       res.status(500).json({ message: "Server error" });

@@ -12,19 +12,17 @@ require("dotenv").config();
 const app = express();
 
 /* ================= MIDDLEWARE ================= */
-app.use(
-  cors({
-    origin: "*",
-    methods: ["GET", "POST", "DELETE"],
-    allowedHeaders: ["Content-Type", "Authorization"],
-  })
-);
+app.use(cors({
+  origin: "*",
+  methods: ["GET", "POST", "DELETE"],
+  allowedHeaders: ["Content-Type", "Authorization"],
+}));
 app.use(express.json());
 
 const PORT = process.env.PORT || 5000;
 const JWT_SECRET = process.env.JWT_SECRET;
 
-/* ================= CLOUDINARY CONFIG ================= */
+/* ================= CLOUDINARY ================= */
 cloudinary.config({
   cloud_name: process.env.CLOUDINARY_CLOUD_NAME,
   api_key: process.env.CLOUDINARY_API_KEY,
@@ -35,9 +33,9 @@ cloudinary.config({
 mongoose
   .connect(process.env.MONGO_URI)
   .then(() => console.log("MongoDB connected ✅"))
-  .catch((err) => console.error("Mongo error ❌", err));
+  .catch((err) => console.error(err));
 
-/* ================= USER MODEL ================= */
+/* ================= MODELS ================= */
 const User = mongoose.model(
   "User",
   new mongoose.Schema(
@@ -52,7 +50,6 @@ const User = mongoose.model(
   )
 );
 
-/* ================= BLOG MODEL ================= */
 const Blog = mongoose.model(
   "Blog",
   new mongoose.Schema(
@@ -64,160 +61,122 @@ const Blog = mongoose.model(
         enum: ["foundations", "deep"],
         required: true,
       },
-      fileUrl: String,     // Cloudinary URL
-      publicId: String,    // Needed for delete later
+      fileUrl: String,   // Cloudinary secure_url
+      publicId: String,  // Cloudinary public_id
       uploadedBy: String,
     },
     { timestamps: true }
   )
 );
 
-/* ================= ROOT ================= */
-app.get("/", (req, res) => {
-  res.send("Prefscale Backend Live 🚀");
-});
-
-/* ================= SIGNUP ================= */
-app.post("/api/signup", async (req, res) => {
-  try {
-    const { name, company, email, password } = req.body;
-
-    if (!name || !company || !email || !password) {
-      return res.status(400).json({ message: "All fields required" });
-    }
-
-    const exists = await User.findOne({ email });
-    if (exists) return res.status(400).json({ message: "User exists" });
-
-    const hashed = await bcrypt.hash(password, 10);
-
-    const user = await User.create({
-      name,
-      company,
-      email,
-      password: hashed,
-    });
-
-    res.json({ message: "Signup successful", role: user.role });
-  } catch (err) {
-    console.error("Signup error:", err);
-    res.status(500).json({ message: "Server error" });
-  }
-});
-
-/* ================= LOGIN ================= */
-app.post("/api/login", async (req, res) => {
-  try {
-    const { email, password } = req.body;
-
-    // ADMIN LOGIN (FROM .env)
-    if (
-      email === process.env.ADMIN_EMAIL &&
-      password === process.env.ADMIN_PASSWORD
-    ) {
-      const token = jwt.sign({ role: "admin" }, JWT_SECRET, {
-        expiresIn: "1d",
-      });
-      return res.json({ token, role: "admin", name: "Admin" });
-    }
-
-    // USER LOGIN
-    const user = await User.findOne({ email });
-    if (!user) return res.status(400).json({ message: "Invalid credentials" });
-
-    const ok = await bcrypt.compare(password, user.password);
-    if (!ok) return res.status(400).json({ message: "Invalid credentials" });
-
-    const token = jwt.sign(
-      { id: user._id, role: user.role },
-      JWT_SECRET,
-      { expiresIn: "1d" }
-    );
-
-    res.json({ token, role: user.role, name: user.name });
-  } catch (err) {
-    console.error("Login error:", err);
-    res.status(500).json({ message: "Server error" });
-  }
-});
-
-/* ================= ADMIN AUTH ================= */
+/* ================= AUTH ================= */
 const adminOnly = (req, res, next) => {
   try {
-    const auth = req.headers.authorization;
-    if (!auth) return res.status(401).json({ message: "No token" });
-
-    const token = auth.split(" ")[1];
+    const token = req.headers.authorization?.split(" ")[1];
     const decoded = jwt.verify(token, JWT_SECRET);
 
     if (decoded.role !== "admin") {
       return res.status(403).json({ message: "Admin only" });
     }
-
     next();
   } catch {
     return res.status(401).json({ message: "Invalid token" });
   }
 };
 
-/* ================= CLOUDINARY STORAGE (FIXED) ================= */
+/* ================= FILE UPLOAD ================= */
 const storage = new CloudinaryStorage({
-  cloudinary: cloudinary,
+  cloudinary,
   params: {
     folder: "prefscale/blogs",
-    resource_type: "raw", // IMPORTANT for PDF/DOC
+    resource_type: "raw", // REQUIRED for PDF / DOC
     allowed_formats: ["pdf", "doc", "docx"],
   },
 });
-
 const upload = multer({ storage });
 
-/* ================= ADMIN BLOG UPLOAD ================= */
+/* ================= ROUTES ================= */
+app.get("/", (_, res) => {
+  res.send("Prefscale Backend Live 🚀");
+});
+
+/* SIGNUP */
+app.post("/api/signup", async (req, res) => {
+  const { name, company, email, password } = req.body;
+  const hashed = await bcrypt.hash(password, 10);
+  await User.create({ name, company, email, password: hashed });
+  res.json({ message: "Signup successful" });
+});
+
+/* LOGIN */
+app.post("/api/login", async (req, res) => {
+  const { email, password } = req.body;
+
+  // ADMIN
+  if (
+    email === process.env.ADMIN_EMAIL &&
+    password === process.env.ADMIN_PASSWORD
+  ) {
+    const token = jwt.sign({ role: "admin" }, JWT_SECRET, { expiresIn: "1d" });
+    return res.json({ token, role: "admin" });
+  }
+
+  // USER
+  const user = await User.findOne({ email });
+  if (!user || !(await bcrypt.compare(password, user.password))) {
+    return res.status(400).json({ message: "Invalid credentials" });
+  }
+
+  const token = jwt.sign({ role: user.role }, JWT_SECRET, { expiresIn: "1d" });
+  res.json({ token, role: user.role });
+});
+
+/* UPLOAD BLOG (ADMIN) */
 app.post(
   "/api/admin/blog",
   adminOnly,
   upload.single("file"),
   async (req, res) => {
-    try {
-      const { title, description, category } = req.body;
+    const { title, description, category } = req.body;
 
-      if (!req.file || !category) {
-        return res
-          .status(400)
-          .json({ message: "File and category required" });
-      }
-
-      const blog = await Blog.create({
-        title,
-        description,
-        category,
-        fileUrl: req.file.path,     // Cloudinary URL
-        publicId: req.file.filename,
-        uploadedBy: "admin",
-      });
-
-      res.json({ message: "Blog uploaded successfully ✅", blog });
-    } catch (err) {
-      console.error("Blog upload error:", err);
-      res.status(500).json({ message: "Server error" });
+    if (!req.file || !category) {
+      return res.status(400).json({ message: "File and category required" });
     }
+
+    const blog = await Blog.create({
+      title,
+      description,
+      category,
+      fileUrl: req.file.path,        // ✅ secure_url
+      publicId: req.file.filename,   // ✅ correct public_id
+      uploadedBy: "admin",
+    });
+
+    res.json(blog);
   }
 );
 
-/* ================= GET BLOGS ================= */
-app.get("/api/blogs", async (req, res) => {
-  try {
-    const { category } = req.query;
-    const filter = category ? { category } : {};
-    const blogs = await Blog.find(filter).sort({ createdAt: -1 });
-    res.json(blogs);
-  } catch (err) {
-    console.error("Fetch blogs error:", err);
-    res.status(500).json({ message: "Server error" });
-  }
+/* DELETE BLOG (ADMIN) */
+app.delete("/api/admin/blog/:id", adminOnly, async (req, res) => {
+  const blog = await Blog.findById(req.params.id);
+  if (!blog) return res.status(404).json({ message: "Blog not found" });
+
+  await cloudinary.uploader.destroy(blog.publicId, {
+    resource_type: "raw",
+  });
+
+  await blog.deleteOne();
+  res.json({ message: "Blog deleted successfully" });
 });
 
-/* ================= START ================= */
+/* GET BLOGS */
+app.get("/api/blogs", async (req, res) => {
+  const filter = req.query.category ? { category: req.query.category } : {};
+  const blogs = await Blog.find(filter).sort({ createdAt: -1 });
+  res.json(blogs);
+});
+
+/* START */
 app.listen(PORT, () => {
   console.log(`Server running on ${PORT}`);
 });

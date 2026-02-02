@@ -12,7 +12,13 @@ require("dotenv").config();
 const app = express();
 
 /* ================= MIDDLEWARE ================= */
-app.use(cors({ origin: "*", methods: ["GET", "POST"] }));
+app.use(
+  cors({
+    origin: "*",
+    methods: ["GET", "POST"],
+    allowedHeaders: ["Content-Type", "Authorization"],
+  })
+);
 app.use(express.json());
 
 const PORT = process.env.PORT || 5000;
@@ -31,7 +37,7 @@ mongoose
   .then(() => console.log("MongoDB connected ✅"))
   .catch((err) => console.error("Mongo error ❌", err));
 
-/* ================= USER SCHEMA ================= */
+/* ================= USER MODEL ================= */
 const User = mongoose.model(
   "User",
   new mongoose.Schema(
@@ -46,7 +52,7 @@ const User = mongoose.model(
   )
 );
 
-/* ================= BLOG SCHEMA ================= */
+/* ================= BLOG MODEL ================= */
 const Blog = mongoose.model(
   "Blog",
   new mongoose.Schema(
@@ -74,13 +80,18 @@ app.get("/", (req, res) => {
 app.post("/api/signup", async (req, res) => {
   try {
     const { name, company, email, password } = req.body;
-    if (!name || !company || !email || !password)
+
+    if (!name || !company || !email || !password) {
       return res.status(400).json({ message: "All fields required" });
+    }
 
     const exists = await User.findOne({ email });
-    if (exists) return res.status(400).json({ message: "User exists" });
+    if (exists) {
+      return res.status(400).json({ message: "User exists" });
+    }
 
     const hashed = await bcrypt.hash(password, 10);
+
     const user = await User.create({
       name,
       company,
@@ -100,7 +111,7 @@ app.post("/api/login", async (req, res) => {
   try {
     const { email, password } = req.body;
 
-    // ADMIN LOGIN (ENV)
+    // 🔐 ADMIN LOGIN (FROM .env ONLY)
     if (
       email === process.env.ADMIN_EMAIL &&
       password === process.env.ADMIN_PASSWORD
@@ -108,10 +119,15 @@ app.post("/api/login", async (req, res) => {
       const token = jwt.sign({ role: "admin" }, JWT_SECRET, {
         expiresIn: "1d",
       });
-      return res.json({ token, role: "admin", name: "Admin" });
+
+      return res.json({
+        token,
+        role: "admin",
+        name: "Admin",
+      });
     }
 
-    // USER LOGIN
+    // 👤 USER LOGIN
     const user = await User.findOne({ email });
     if (!user) return res.status(400).json({ message: "Invalid credentials" });
 
@@ -140,8 +156,9 @@ const adminOnly = (req, res, next) => {
     const token = auth.split(" ")[1];
     const decoded = jwt.verify(token, JWT_SECRET);
 
-    if (decoded.role !== "admin")
+    if (decoded.role !== "admin") {
       return res.status(403).json({ message: "Admin only" });
+    }
 
     next();
   } catch {
@@ -149,12 +166,12 @@ const adminOnly = (req, res, next) => {
   }
 };
 
-/* ================= FILE UPLOAD (CLOUDINARY) ================= */
+/* ================= CLOUDINARY STORAGE ================= */
 const storage = new CloudinaryStorage({
   cloudinary,
   params: {
     folder: "prefscale/blogs",
-    resource_type: "raw", // IMPORTANT for PDF / DOC
+    resource_type: "raw", // 🔥 REQUIRED for PDF/DOC
     allowed_formats: ["pdf", "doc", "docx"],
   },
 });
@@ -180,7 +197,7 @@ app.post(
         title,
         description,
         category,
-        fileUrl: req.file.path, // 🔥 CLOUDINARY LINK
+        fileUrl: req.file.path, // 🔥 CLOUDINARY URL
         uploadedBy: "admin",
       });
 

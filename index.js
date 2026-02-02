@@ -167,11 +167,14 @@ const adminOnly = (req, res, next) => {
 };
 
 /* ================= CLOUDINARY STORAGE ================= */
+const CloudinaryStorage =
+  require("multer-storage-cloudinary").CloudinaryStorage;
+
 const storage = new CloudinaryStorage({
-  cloudinary,
+  cloudinary: cloudinary,
   params: {
     folder: "prefscale/blogs",
-    resource_type: "raw", // 🔥 REQUIRED for PDF/DOC
+    resource_type: "raw",
     allowed_formats: ["pdf", "doc", "docx"],
   },
 });

@@ -6,7 +6,8 @@ const jwt = require("jsonwebtoken");
 const mongoose = require("mongoose");
 const multer = require("multer");
 const cloudinary = require("cloudinary").v2;
-const { CloudinaryStorage } = require("multer-storage-cloudinary");
+const CloudinaryStorage =
+  require("multer-storage-cloudinary").CloudinaryStorage;
 require("dotenv").config();
 
 const app = express();
@@ -64,7 +65,7 @@ const Blog = mongoose.model(
         enum: ["foundations", "deep"],
         required: true,
       },
-      fileUrl: String, // 🔥 Cloudinary URL
+      fileUrl: String, // Cloudinary URL
       uploadedBy: String,
     },
     { timestamps: true }
@@ -86,9 +87,7 @@ app.post("/api/signup", async (req, res) => {
     }
 
     const exists = await User.findOne({ email });
-    if (exists) {
-      return res.status(400).json({ message: "User exists" });
-    }
+    if (exists) return res.status(400).json({ message: "User exists" });
 
     const hashed = await bcrypt.hash(password, 10);
 
@@ -111,7 +110,7 @@ app.post("/api/login", async (req, res) => {
   try {
     const { email, password } = req.body;
 
-    // 🔐 ADMIN LOGIN (FROM .env ONLY)
+    // ADMIN LOGIN
     if (
       email === process.env.ADMIN_EMAIL &&
       password === process.env.ADMIN_PASSWORD
@@ -120,14 +119,10 @@ app.post("/api/login", async (req, res) => {
         expiresIn: "1d",
       });
 
-      return res.json({
-        token,
-        role: "admin",
-        name: "Admin",
-      });
+      return res.json({ token, role: "admin", name: "Admin" });
     }
 
-    // 👤 USER LOGIN
+    // USER LOGIN
     const user = await User.findOne({ email });
     if (!user) return res.status(400).json({ message: "Invalid credentials" });
 
@@ -167,11 +162,8 @@ const adminOnly = (req, res, next) => {
 };
 
 /* ================= CLOUDINARY STORAGE ================= */
-const CloudinaryStorage =
-  require("multer-storage-cloudinary").CloudinaryStorage;
-
 const storage = new CloudinaryStorage({
-  cloudinary: cloudinary,
+  cloudinary,
   params: {
     folder: "prefscale/blogs",
     resource_type: "raw",
@@ -200,7 +192,7 @@ app.post(
         title,
         description,
         category,
-        fileUrl: req.file.path, // 🔥 CLOUDINARY URL
+        fileUrl: req.file.path,
         uploadedBy: "admin",
       });
 

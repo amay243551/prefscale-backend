@@ -157,17 +157,33 @@ app.post(
 );
 
 /* DELETE BLOG (ADMIN) */
+/* ================= DELETE BLOG (ADMIN) ================= */
 app.delete("/api/admin/blog/:id", adminOnly, async (req, res) => {
-  const blog = await Blog.findById(req.params.id);
-  if (!blog) return res.status(404).json({ message: "Blog not found" });
+  try {
+    const blog = await Blog.findById(req.params.id);
+    if (!blog) {
+      return res.status(404).json({ message: "Blog not found" });
+    }
 
-  await cloudinary.uploader.destroy(blog.publicId, {
-    resource_type: "raw",
-  });
+    // 🔥 CASE 1: Cloudinary file
+    if (blog.publicId) {
+      await cloudinary.uploader.destroy(blog.publicId, {
+        resource_type: "raw",
+      });
+    }
 
-  await blog.deleteOne();
-  res.json({ message: "Blog deleted successfully" });
+    // 🔥 CASE 2: Old local/public upload
+    // (nothing to delete from cloud, just DB)
+
+    await blog.deleteOne();
+
+    res.json({ message: "Blog deleted successfully ✅" });
+  } catch (err) {
+    console.error("Delete blog error:", err);
+    res.status(500).json({ message: "Delete failed" });
+  }
 });
+;
 
 /* GET BLOGS */
 app.get("/api/blogs", async (req, res) => {

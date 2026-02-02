@@ -5,58 +5,65 @@ const bcrypt = require("bcryptjs");
 const jwt = require("jsonwebtoken");
 const mongoose = require("mongoose");
 const multer = require("multer");
-const path = require("path");
+const cloudinary = require("cloudinary").v2;
+const { CloudinaryStorage } = require("multer-storage-cloudinary");
 require("dotenv").config();
 
 const app = express();
 
 /* ================= MIDDLEWARE ================= */
-app.use(cors());
+app.use(cors({ origin: "*", methods: ["GET", "POST"] }));
 app.use(express.json());
-
-// 🔥 IMPORTANT: serve uploads correctly
-app.use("/uploads", express.static(path.join(__dirname, "uploads")));
 
 const PORT = process.env.PORT || 5000;
 const JWT_SECRET = process.env.JWT_SECRET;
 
+/* ================= CLOUDINARY CONFIG ================= */
+cloudinary.config({
+  cloud_name: process.env.CLOUDINARY_CLOUD_NAME,
+  api_key: process.env.CLOUDINARY_API_KEY,
+  api_secret: process.env.CLOUDINARY_API_SECRET,
+});
+
 /* ================= MONGODB ================= */
 mongoose
-  .connect(process.env.MONGO_URI, {
-    serverSelectionTimeoutMS: 30000,
-  })
+  .connect(process.env.MONGO_URI)
   .then(() => console.log("MongoDB connected ✅"))
   .catch((err) => console.error("Mongo error ❌", err));
 
 /* ================= USER SCHEMA ================= */
-const userSchema = new mongoose.Schema(
-  {
-    name: String,
-    company: String,
-    email: { type: String, unique: true },
-    password: String,
-    role: { type: String, enum: ["user", "admin"], default: "user" },
-  },
-  { timestamps: true }
+const User = mongoose.model(
+  "User",
+  new mongoose.Schema(
+    {
+      name: String,
+      company: String,
+      email: { type: String, unique: true },
+      password: String,
+      role: { type: String, enum: ["user", "admin"], default: "user" },
+    },
+    { timestamps: true }
+  )
 );
-const User = mongoose.model("User", userSchema);
 
 /* ================= BLOG SCHEMA ================= */
-const blogSchema = new mongoose.Schema(
-  {
-    title: String,
-    description: String,
-    pdf: String, // filename
-    category: {
-      type: String,
-      enum: ["foundations", "deep"],
-      required: true,
+const Blog = mongoose.model(
+  "Blog",
+  new mongoose.Schema(
+    {
+      title: String,
+      description: String,
+      category: {
+        type: String,
+        enum: ["foundations", "deep"],
+        required: true,
+      },
+      fileUrl: String, // 🔥 Cloudinary URL
+      uploadedBy: String,
     },
-    uploadedBy: String,
-  },
-  { timestamps: true }
+    { timestamps: true }
+  )
 );
-const Blog = mongoose.model("Blog", blogSchema);
 
 /* ================= ROOT ================= */
 app.get("/", (req, res) => {
@@ -67,16 +74,13 @@ app.get("/", (req, res) => {
 app.post("/api/signup", async (req, res) => {
   try {
     const { name, company, email, password } = req.body;
-
-    if (!name || !company || !email || !password) {
+    if (!name || !company || !email || !password)
       return res.status(400).json({ message: "All fields required" });
-    }
 
     const exists = await User.findOne({ email });
     if (exists) return res.status(400).json({ message: "User exists" });
 
     const hashed = await bcrypt.hash(password, 10);
-
     const user = await User.create({
       name,
       company,
@@ -96,7 +100,7 @@ app.post("/api/login", async (req, res) => {
   try {
     const { email, password } = req.body;
 
-    // ADMIN LOGIN (FROM .env)
+    // ADMIN LOGIN (ENV)
     if (
       email === process.env.ADMIN_EMAIL &&
       password === process.env.ADMIN_PASSWORD
@@ -104,12 +108,7 @@ app.post("/api/login", async (req, res) => {
       const token = jwt.sign({ role: "admin" }, JWT_SECRET, {
         expiresIn: "1d",
       });
-
-      return res.json({
-        token,
-        role: "admin",
-        name: "Admin",
-      });
+      return res.json({ token, role: "admin", name: "Admin" });
     }
 
     // USER LOGIN
@@ -132,7 +131,7 @@ app.post("/api/login", async (req, res) => {
   }
 });
 
-/* ================= ADMIN MIDDLEWARE ================= */
+/* ================= ADMIN AUTH ================= */
 const adminOnly = (req, res, next) => {
   try {
     const auth = req.headers.authorization;
@@ -150,11 +149,13 @@ const adminOnly = (req, res, next) => {
   }
 };
 
-/* ================= FILE UPLOAD ================= */
-const storage = multer.diskStorage({
-  destination: "uploads/",
-  filename: (_, file, cb) => {
-    cb(null, Date.now() + "-" + file.originalname);
+/* ================= FILE UPLOAD (CLOUDINARY) ================= */
+const storage = new CloudinaryStorage({
+  cloudinary,
+  params: {
+    folder: "prefscale/blogs",
+    resource_type: "raw", // IMPORTANT for PDF / DOC
+    allowed_formats: ["pdf", "doc", "docx"],
   },
 });
 
@@ -179,7 +180,7 @@ app.post(
         title,
         description,
         category,
-        pdf: req.file.filename,
+        fileUrl: req.file.path, // 🔥 CLOUDINARY LINK
         uploadedBy: "admin",
       });
 
@@ -196,7 +197,6 @@ app.get("/api/blogs", async (req, res) => {
   try {
     const { category } = req.query;
     const filter = category ? { category } : {};
-
     const blogs = await Blog.find(filter).sort({ createdAt: -1 });
     res.json(blogs);
   } catch (err) {

@@ -6,8 +6,7 @@ const jwt = require("jsonwebtoken");
 const mongoose = require("mongoose");
 const multer = require("multer");
 const cloudinary = require("cloudinary").v2;
-const CloudinaryStorage =
-  require("multer-storage-cloudinary").CloudinaryStorage;
+const { CloudinaryStorage } = require("multer-storage-cloudinary");
 require("dotenv").config();
 
 const app = express();
@@ -16,7 +15,7 @@ const app = express();
 app.use(
   cors({
     origin: "*",
-    methods: ["GET", "POST"],
+    methods: ["GET", "POST", "DELETE"],
     allowedHeaders: ["Content-Type", "Authorization"],
   })
 );
@@ -65,7 +64,8 @@ const Blog = mongoose.model(
         enum: ["foundations", "deep"],
         required: true,
       },
-      fileUrl: String, // Cloudinary URL
+      fileUrl: String,     // Cloudinary URL
+      publicId: String,    // Needed for delete later
       uploadedBy: String,
     },
     { timestamps: true }
@@ -110,7 +110,7 @@ app.post("/api/login", async (req, res) => {
   try {
     const { email, password } = req.body;
 
-    // ADMIN LOGIN
+    // ADMIN LOGIN (FROM .env)
     if (
       email === process.env.ADMIN_EMAIL &&
       password === process.env.ADMIN_PASSWORD
@@ -118,7 +118,6 @@ app.post("/api/login", async (req, res) => {
       const token = jwt.sign({ role: "admin" }, JWT_SECRET, {
         expiresIn: "1d",
       });
-
       return res.json({ token, role: "admin", name: "Admin" });
     }
 
@@ -161,12 +160,12 @@ const adminOnly = (req, res, next) => {
   }
 };
 
-/* ================= CLOUDINARY STORAGE ================= */
+/* ================= CLOUDINARY STORAGE (FIXED) ================= */
 const storage = new CloudinaryStorage({
-  cloudinary,
+  cloudinary: cloudinary,
   params: {
     folder: "prefscale/blogs",
-    resource_type: "raw",
+    resource_type: "raw", // IMPORTANT for PDF/DOC
     allowed_formats: ["pdf", "doc", "docx"],
   },
 });
@@ -192,7 +191,8 @@ app.post(
         title,
         description,
         category,
-        fileUrl: req.file.path,
+        fileUrl: req.file.path,     // Cloudinary URL
+        publicId: req.file.filename,
         uploadedBy: "admin",
       });
 

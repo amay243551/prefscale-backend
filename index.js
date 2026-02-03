@@ -12,11 +12,13 @@ require("dotenv").config();
 const app = express();
 
 /* ================= MIDDLEWARE ================= */
-app.use(cors({
-  origin: "*",
-  methods: ["GET", "POST", "DELETE"],
-  allowedHeaders: ["Content-Type", "Authorization"],
-}));
+app.use(
+  cors({
+    origin: "*",
+    methods: ["GET", "POST", "DELETE"],
+    allowedHeaders: ["Content-Type", "Authorization"],
+  })
+);
 app.use(express.json());
 
 const PORT = process.env.PORT || 5000;
@@ -61,9 +63,23 @@ const Blog = mongoose.model(
         enum: ["foundations", "deep"],
         required: true,
       },
-      fileUrl: String,   // Cloudinary secure_url
-      publicId: String,  // Cloudinary public_id
+      fileUrl: String,
+      publicId: String,
       uploadedBy: String,
+    },
+    { timestamps: true }
+  )
+);
+
+/* ================= CONTACT MODEL  ================= */
+const Contact = mongoose.model(
+  "Contact",
+  new mongoose.Schema(
+    {
+      name: { type: String, required: true },
+      company: String,
+      email: { type: String, required: true },
+      message: { type: String, required: true },
     },
     { timestamps: true }
   )
@@ -89,7 +105,7 @@ const storage = new CloudinaryStorage({
   cloudinary,
   params: {
     folder: "prefscale/blogs",
-    resource_type: "raw", // REQUIRED for PDF / DOC
+    resource_type: "raw",
     allowed_formats: ["pdf", "doc", "docx"],
   },
 });
@@ -102,10 +118,14 @@ app.get("/", (_, res) => {
 
 /* SIGNUP */
 app.post("/api/signup", async (req, res) => {
-  const { name, company, email, password } = req.body;
-  const hashed = await bcrypt.hash(password, 10);
-  await User.create({ name, company, email, password: hashed });
-  res.json({ message: "Signup successful" });
+  try {
+    const { name, company, email, password } = req.body;
+    const hashed = await bcrypt.hash(password, 10);
+    await User.create({ name, company, email, password: hashed });
+    res.json({ message: "Signup successful" });
+  } catch (err) {
+    res.status(400).json({ message: "Email already exists" });
+  }
 });
 
 /* LOGIN */
@@ -117,7 +137,9 @@ app.post("/api/login", async (req, res) => {
     email === process.env.ADMIN_EMAIL &&
     password === process.env.ADMIN_PASSWORD
   ) {
-    const token = jwt.sign({ role: "admin" }, JWT_SECRET, { expiresIn: "1d" });
+    const token = jwt.sign({ role: "admin" }, JWT_SECRET, {
+      expiresIn: "1d",
+    });
     return res.json({ token, role: "admin" });
   }
 
@@ -127,8 +149,31 @@ app.post("/api/login", async (req, res) => {
     return res.status(400).json({ message: "Invalid credentials" });
   }
 
-  const token = jwt.sign({ role: user.role }, JWT_SECRET, { expiresIn: "1d" });
+  const token = jwt.sign(
+    { role: user.role, id: user._id },
+    JWT_SECRET,
+    { expiresIn: "1d" }
+  );
+
   res.json({ token, role: user.role });
+});
+
+/* ================= CONTACT ROUTE  ================= */
+app.post("/api/contact", async (req, res) => {
+  try {
+    const { name, company, email, message } = req.body;
+
+    if (!name || !email || !message) {
+      return res.status(400).json({ message: "Required fields missing" });
+    }
+
+    await Contact.create({ name, company, email, message });
+
+    res.json({ message: "Message sent successfully ✅" });
+  } catch (err) {
+    console.error("Contact error:", err);
+    res.status(500).json({ message: "Failed to send message" });
+  }
 });
 
 /* UPLOAD BLOG (ADMIN) */
@@ -147,8 +192,8 @@ app.post(
       title,
       description,
       category,
-      fileUrl: req.file.path,        // ✅ secure_url
-      publicId: req.file.filename,   // ✅ correct public_id
+      fileUrl: req.file.path,
+      publicId: req.file.filename,
       uploadedBy: "admin",
     });
 
@@ -157,22 +202,18 @@ app.post(
 );
 
 /* DELETE BLOG (ADMIN) */
-/* ================= DELETE BLOG (ADMIN) ================= */
 app.delete("/api/admin/blog/:id", adminOnly, async (req, res) => {
   try {
     const blog = await Blog.findById(req.params.id);
     if (!blog) return res.status(404).json({ message: "Blog not found" });
 
-    // 🔥 Cloudinary delete (new files)
     if (blog.publicId) {
       await cloudinary.uploader.destroy(blog.publicId, {
         resource_type: "raw",
       });
     }
 
-    // 🔥 Old files: DB delete only (EXPECTED)
     await blog.deleteOne();
-
     res.json({ message: "Blog deleted successfully ✅" });
   } catch (err) {
     console.error("Delete error:", err);

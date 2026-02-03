@@ -31,11 +31,16 @@ cloudinary.config({
   api_secret: process.env.CLOUDINARY_API_SECRET,
 });
 
-/* ================= MONGODB ================= */
+/* ================= MONGODB (ENV-AGNOSTIC) ================= */
 mongoose
-  .connect(process.env.MONGO_URI)
+  .connect(process.env.MONGO_URI, {
+    maxPoolSize: Number(process.env.DB_MAX_POOL) || 10,
+    minPoolSize: Number(process.env.DB_MIN_POOL) || 2,
+    serverSelectionTimeoutMS: 5000,
+    socketTimeoutMS: 45000,
+  })
   .then(() => console.log("MongoDB connected ✅"))
-  .catch((err) => console.error(err));
+  .catch((err) => console.error("Mongo error:", err));
 
 /* ================= MODELS ================= */
 const User = mongoose.model(
@@ -44,7 +49,7 @@ const User = mongoose.model(
     {
       name: String,
       company: String,
-      email: { type: String, unique: true },
+      email: { type: String, unique: true, index: true },
       password: String,
       role: { type: String, enum: ["user", "admin"], default: "user" },
     },
@@ -71,7 +76,6 @@ const Blog = mongoose.model(
   )
 );
 
-/* ================= CONTACT MODEL  ================= */
 const Contact = mongoose.model(
   "Contact",
   new mongoose.Schema(
@@ -116,11 +120,12 @@ app.get("/", (_, res) => {
   res.send("Prefscale Backend Live 🚀");
 });
 
-/* SIGNUP */
+/* ================= SIGNUP ================= */
 app.post("/api/signup", async (req, res) => {
   try {
     const { name, company, email, password } = req.body;
     const hashed = await bcrypt.hash(password, 10);
+
     await User.create({ name, company, email, password: hashed });
     res.json({ message: "Signup successful" });
   } catch (err) {
@@ -128,37 +133,51 @@ app.post("/api/signup", async (req, res) => {
   }
 });
 
-/* LOGIN */
+/* ================= LOGIN (STABLE FOR FREE + PAID) ================= */
 app.post("/api/login", async (req, res) => {
-  const { email, password } = req.body;
+  try {
+    const { email, password } = req.body;
 
-  // ADMIN
-  if (
-    email === process.env.ADMIN_EMAIL &&
-    password === process.env.ADMIN_PASSWORD
-  ) {
-    const token = jwt.sign({ role: "admin" }, JWT_SECRET, {
-      expiresIn: "1d",
-    });
-    return res.json({ token, role: "admin" });
+    if (!email || !password) {
+      return res.status(400).json({ message: "Missing credentials" });
+    }
+
+    // ADMIN LOGIN
+    if (
+      email === process.env.ADMIN_EMAIL &&
+      password === process.env.ADMIN_PASSWORD
+    ) {
+      const token = jwt.sign({ role: "admin" }, JWT_SECRET, {
+        expiresIn: "1d",
+      });
+      return res.json({ token, role: "admin" });
+    }
+
+    // NORMAL USER LOGIN
+    const user = await User.findOne({ email }).lean();
+    if (!user) {
+      return res.status(400).json({ message: "Invalid credentials" });
+    }
+
+    const match = await bcrypt.compare(password, user.password);
+    if (!match) {
+      return res.status(400).json({ message: "Invalid credentials" });
+    }
+
+    const token = jwt.sign(
+      { role: user.role, id: user._id },
+      JWT_SECRET,
+      { expiresIn: "1d" }
+    );
+
+    res.json({ token, role: user.role });
+  } catch (err) {
+    console.error("Login error:", err);
+    res.status(503).json({ message: "Server busy, retry later" });
   }
-
-  // USER
-  const user = await User.findOne({ email });
-  if (!user || !(await bcrypt.compare(password, user.password))) {
-    return res.status(400).json({ message: "Invalid credentials" });
-  }
-
-  const token = jwt.sign(
-    { role: user.role, id: user._id },
-    JWT_SECRET,
-    { expiresIn: "1d" }
-  );
-
-  res.json({ token, role: user.role });
 });
 
-/* ================= CONTACT ROUTE  ================= */
+/* ================= CONTACT ================= */
 app.post("/api/contact", async (req, res) => {
   try {
     const { name, company, email, message } = req.body;
@@ -168,7 +187,6 @@ app.post("/api/contact", async (req, res) => {
     }
 
     await Contact.create({ name, company, email, message });
-
     res.json({ message: "Message sent successfully ✅" });
   } catch (err) {
     console.error("Contact error:", err);
@@ -176,7 +194,7 @@ app.post("/api/contact", async (req, res) => {
   }
 });
 
-/* UPLOAD BLOG (ADMIN) */
+/* ================= BLOG UPLOAD ================= */
 app.post(
   "/api/admin/blog",
   adminOnly,
@@ -201,7 +219,7 @@ app.post(
   }
 );
 
-/* DELETE BLOG (ADMIN) */
+/* ================= DELETE BLOG ================= */
 app.delete("/api/admin/blog/:id", adminOnly, async (req, res) => {
   try {
     const blog = await Blog.findById(req.params.id);
@@ -221,14 +239,14 @@ app.delete("/api/admin/blog/:id", adminOnly, async (req, res) => {
   }
 });
 
-/* GET BLOGS */
+/* ================= GET BLOGS ================= */
 app.get("/api/blogs", async (req, res) => {
   const filter = req.query.category ? { category: req.query.category } : {};
   const blogs = await Blog.find(filter).sort({ createdAt: -1 });
   res.json(blogs);
 });
 
-/* START */
+/* ================= START ================= */
 app.listen(PORT, () => {
   console.log(`Server running on ${PORT}`);
 });

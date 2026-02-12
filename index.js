@@ -24,6 +24,11 @@ app.use(express.json());
 const PORT = process.env.PORT || 5000;
 const JWT_SECRET = process.env.JWT_SECRET;
 
+/* ================= HEALTH ROUTE ================= */
+app.get("/", (req, res) => {
+  res.send("Prefscale Backend Running 🚀");
+});
+
 /* ================= CLOUDINARY ================= */
 cloudinary.config({
   cloud_name: process.env.CLOUDINARY_CLOUD_NAME,
@@ -46,7 +51,7 @@ const Blog = mongoose.model(
       title: { type: String, required: true },
       description: { type: String, required: true },
 
-      // Rich text content (for allblogs)
+      // Rich HTML content (for AllBlogs)
       content: { type: String },
 
       section: {
@@ -54,7 +59,7 @@ const Blog = mongoose.model(
         enum: ["resources", "allblogs"],
       },
 
-      // For resources (PDF)
+      // Only for resources (PDF system)
       fileUrl: String,
       publicId: String,
 
@@ -69,7 +74,8 @@ const Blog = mongoose.model(
 const adminOnly = (req, res, next) => {
   try {
     const token = req.headers.authorization?.split(" ")[1];
-    if (!token) return res.status(401).json({ message: "No token provided" });
+    if (!token)
+      return res.status(401).json({ message: "No token provided" });
 
     const decoded = jwt.verify(token, JWT_SECRET);
 
@@ -143,6 +149,11 @@ app.post(
     try {
       const { title, description, content } = req.body;
 
+      if (!title || !description || !content)
+        return res
+          .status(400)
+          .json({ message: "Title, description & content required" });
+
       const blog = await Blog.create({
         title,
         description,
@@ -169,7 +180,7 @@ app.post(
   }
 );
 
-/* ================= GET BLOGS (FIX FOR OLD DATA) ================= */
+/* ================= GET BLOGS ================= */
 app.get("/api/blogs", async (req, res) => {
   try {
     const { section } = req.query;
@@ -179,11 +190,13 @@ app.get("/api/blogs", async (req, res) => {
     if (section) {
       filter.$or = [
         { section: section },
-        { section: { $exists: false } }, // 🔥 SHOW OLD BLOGS TOO
+        { section: { $exists: false } }, // include old blogs
       ];
     }
 
-    const blogs = await Blog.find(filter).sort({ createdAt: -1 });
+    const blogs = await Blog.find(filter).sort({
+      createdAt: -1,
+    });
 
     res.json(blogs);
   } catch (err) {
@@ -200,7 +213,7 @@ app.get("/api/blog/:id", async (req, res) => {
       return res.status(404).json({ message: "Blog not found" });
 
     res.json(blog);
-  } catch {
+  } catch (err) {
     res.status(500).json({ message: "Error fetching blog" });
   }
 });

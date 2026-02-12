@@ -266,7 +266,13 @@ app.get("/api/blogs", async (req, res) => {
 
     const filter = {};
 
-    if (section) filter.section = section;
+    if (section) {
+      filter.$or = [
+        { section: section },
+        { section: { $exists: false } }, // support old blogs
+      ];
+    }
+
     if (category) filter.category = category;
 
     const blogs = await Blog.find(filter).sort({ createdAt: -1 });

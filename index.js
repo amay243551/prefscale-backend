@@ -19,23 +19,24 @@ app.use(
     allowedHeaders: ["Content-Type", "Authorization"],
   })
 );
+
 app.use(express.json());
 
 const PORT = process.env.PORT || 5000;
 const JWT_SECRET = process.env.JWT_SECRET;
 
-/* ================= CLOUDINARY ================= */
+/* ================= CLOUDINARY CONFIG ================= */
 cloudinary.config({
   cloud_name: process.env.CLOUDINARY_CLOUD_NAME,
   api_key: process.env.CLOUDINARY_API_KEY,
   api_secret: process.env.CLOUDINARY_API_SECRET,
 });
 
-/* ================= MONGODB ================= */
+/* ================= MONGODB CONNECTION ================= */
 mongoose
   .connect(process.env.MONGO_URI, {
-    maxPoolSize: Number(process.env.DB_MAX_POOL) || 10,
-    minPoolSize: Number(process.env.DB_MIN_POOL) || 2,
+    maxPoolSize: 10,
+    minPoolSize: 2,
     serverSelectionTimeoutMS: 5000,
     socketTimeoutMS: 45000,
   })
@@ -58,7 +59,7 @@ const User = mongoose.model(
   )
 );
 
-/* 🔥 UPDATED BLOG MODEL */
+/* BLOG MODEL */
 const Blog = mongoose.model(
   "Blog",
   new mongoose.Schema(
@@ -71,11 +72,11 @@ const Blog = mongoose.model(
         enum: ["foundations", "deep"],
       },
 
-      /* 🔥 NEW FIELD */
+      // NEW FIELD (for Resources & AllBlogs separation)
       section: {
         type: String,
         enum: ["resources", "allblogs"],
-        required: true,
+        default: "resources", // fallback for safety
       },
 
       fileUrl: String,
@@ -99,10 +100,12 @@ const Contact = mongoose.model(
   )
 );
 
-/* ================= AUTH ================= */
+/* ================= AUTH MIDDLEWARE ================= */
 const adminOnly = (req, res, next) => {
   try {
     const token = req.headers.authorization?.split(" ")[1];
+    if (!token) return res.status(401).json({ message: "No token provided" });
+
     const decoded = jwt.verify(token, JWT_SECRET);
 
     if (decoded.role !== "admin") {
@@ -124,6 +127,7 @@ const storage = new CloudinaryStorage({
     allowed_formats: ["pdf", "doc", "docx"],
   },
 });
+
 const upload = multer({ storage });
 
 /* ================= ROUTES ================= */
@@ -136,9 +140,16 @@ app.get("/", (_, res) => {
 app.post("/api/signup", async (req, res) => {
   try {
     const { name, company, email, password } = req.body;
+
     const hashed = await bcrypt.hash(password, 10);
 
-    await User.create({ name, company, email, password: hashed });
+    await User.create({
+      name,
+      company,
+      email,
+      password: hashed,
+    });
+
     res.json({ message: "Signup successful" });
   } catch {
     res.status(400).json({ message: "Email already exists" });
@@ -150,9 +161,8 @@ app.post("/api/login", async (req, res) => {
   try {
     const { email, password } = req.body;
 
-    if (!email || !password) {
+    if (!email || !password)
       return res.status(400).json({ message: "Missing credentials" });
-    }
 
     /* ADMIN LOGIN */
     if (
@@ -162,19 +172,18 @@ app.post("/api/login", async (req, res) => {
       const token = jwt.sign({ role: "admin" }, JWT_SECRET, {
         expiresIn: "1d",
       });
+
       return res.json({ token, role: "admin" });
     }
 
     /* USER LOGIN */
     const user = await User.findOne({ email }).lean();
-    if (!user) {
+    if (!user)
       return res.status(400).json({ message: "Invalid credentials" });
-    }
 
     const match = await bcrypt.compare(password, user.password);
-    if (!match) {
+    if (!match)
       return res.status(400).json({ message: "Invalid credentials" });
-    }
 
     const token = jwt.sign(
       { role: user.role, id: user._id },
@@ -194,19 +203,18 @@ app.post("/api/contact", async (req, res) => {
   try {
     const { name, company, email, message } = req.body;
 
-    if (!name || !email || !message) {
+    if (!name || !email || !message)
       return res.status(400).json({ message: "Required fields missing" });
-    }
 
     await Contact.create({ name, company, email, message });
 
     res.json({ message: "Message sent successfully ✅" });
-  } catch (err) {
+  } catch {
     res.status(500).json({ message: "Failed to send message" });
   }
 });
 
-/* ================= BLOG UPLOAD ================= */
+/* ================= ADMIN BLOG UPLOAD ================= */
 app.post(
   "/api/admin/blog",
   adminOnly,
@@ -215,20 +223,19 @@ app.post(
     try {
       const { title, description, category, section } = req.body;
 
-      if (!title || !description || !section || !req.file) {
+      if (!title || !description || !req.file)
         return res.status(400).json({
-          message: "Title, description, file and section are required",
+          message: "Title, description and file are required",
         });
-      }
 
       const blog = await Blog.create({
         title,
         description,
         category,
-        section, // 🔥 important
+        section: section || "resources",
         fileUrl: req.file.path,
         publicId: req.file.filename,
-        uploadedBy: process.env.ADMIN_EMAIL,
+        uploadedBy: process.env.ADMIN_EMAIL || "Admin",
       });
 
       res.json(blog);
@@ -243,7 +250,8 @@ app.post(
 app.delete("/api/admin/blog/:id", adminOnly, async (req, res) => {
   try {
     const blog = await Blog.findById(req.params.id);
-    if (!blog) return res.status(404).json({ message: "Blog not found" });
+    if (!blog)
+      return res.status(404).json({ message: "Blog not found" });
 
     if (blog.publicId) {
       await cloudinary.uploader.destroy(blog.publicId, {
@@ -254,7 +262,7 @@ app.delete("/api/admin/blog/:id", adminOnly, async (req, res) => {
     await blog.deleteOne();
 
     res.json({ message: "Blog deleted successfully ✅" });
-  } catch (err) {
+  } catch {
     res.status(500).json({ message: "Delete failed" });
   }
 });
@@ -266,10 +274,11 @@ app.get("/api/blogs", async (req, res) => {
 
     const filter = {};
 
+    // SECTION FILTER (supports old blogs too)
     if (section) {
       filter.$or = [
         { section: section },
-        { section: { $exists: false } }, // support old blogs
+        { section: { $exists: false } },
       ];
     }
 
@@ -279,11 +288,12 @@ app.get("/api/blogs", async (req, res) => {
 
     res.json(blogs);
   } catch (err) {
+    console.error("Fetch error:", err);
     res.status(500).json({ message: "Failed to fetch blogs" });
   }
 });
 
-/* ================= START ================= */
+/* ================= START SERVER ================= */
 app.listen(PORT, () => {
   console.log(`Server running on ${PORT}`);
 });

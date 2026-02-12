@@ -1,6 +1,7 @@
 /* eslint-disable */
 const express = require("express");
 const cors = require("cors");
+const bcrypt = require("bcryptjs");
 const jwt = require("jsonwebtoken");
 const mongoose = require("mongoose");
 const multer = require("multer");
@@ -42,7 +43,21 @@ mongoose
   .then(() => console.log("MongoDB connected ✅"))
   .catch((err) => console.error("Mongo error:", err));
 
-/* ================= BLOG MODEL ================= */
+/* ================= MODELS ================= */
+
+const User = mongoose.model(
+  "User",
+  new mongoose.Schema(
+    {
+      name: String,
+      company: String,
+      email: { type: String, unique: true },
+      password: String,
+      role: { type: String, default: "user" },
+    },
+    { timestamps: true }
+  )
+);
 
 const Blog = mongoose.model(
   "Blog",
@@ -50,26 +65,20 @@ const Blog = mongoose.model(
     {
       title: { type: String, required: true },
       description: { type: String, required: true },
-
-      // Rich HTML content (for AllBlogs)
-      content: { type: String },
-
+      content: String,
       section: {
         type: String,
         enum: ["resources", "allblogs"],
       },
-
-      // Only for resources (PDF system)
       fileUrl: String,
       publicId: String,
-
-      uploadedBy: { type: String, required: true },
+      uploadedBy: String,
     },
     { timestamps: true }
   )
 );
 
-/* ================= AUTH ================= */
+/* ================= AUTH MIDDLEWARE ================= */
 
 const adminOnly = (req, res, next) => {
   try {
@@ -88,9 +97,68 @@ const adminOnly = (req, res, next) => {
   }
 };
 
-/* ================= STORAGE CONFIG ================= */
+/* ================= AUTH ROUTES ================= */
 
-/* PDF STORAGE (Resources) */
+/* SIGNUP */
+app.post("/api/signup", async (req, res) => {
+  try {
+    const { name, company, email, password } = req.body;
+
+    const hashed = await bcrypt.hash(password, 10);
+
+    await User.create({
+      name,
+      company,
+      email,
+      password: hashed,
+    });
+
+    res.json({ message: "Signup successful" });
+  } catch (err) {
+    res.status(400).json({ message: "Email already exists" });
+  }
+});
+
+/* LOGIN */
+app.post("/api/login", async (req, res) => {
+  try {
+    const { email, password } = req.body;
+
+    /* ADMIN LOGIN */
+    if (
+      email === process.env.ADMIN_EMAIL &&
+      password === process.env.ADMIN_PASSWORD
+    ) {
+      const token = jwt.sign({ role: "admin" }, JWT_SECRET, {
+        expiresIn: "1d",
+      });
+
+      return res.json({ token, role: "admin" });
+    }
+
+    /* USER LOGIN */
+    const user = await User.findOne({ email });
+    if (!user)
+      return res.status(400).json({ message: "Invalid credentials" });
+
+    const match = await bcrypt.compare(password, user.password);
+    if (!match)
+      return res.status(400).json({ message: "Invalid credentials" });
+
+    const token = jwt.sign(
+      { role: user.role, id: user._id },
+      JWT_SECRET,
+      { expiresIn: "1d" }
+    );
+
+    res.json({ token, role: user.role });
+  } catch {
+    res.status(500).json({ message: "Login failed" });
+  }
+});
+
+/* ================= STORAGE ================= */
+
 const resourceStorage = new CloudinaryStorage({
   cloudinary,
   params: {
@@ -102,7 +170,6 @@ const resourceStorage = new CloudinaryStorage({
 
 const uploadResource = multer({ storage: resourceStorage });
 
-/* BLOG IMAGE STORAGE (Rich Content Images) */
 const blogImageStorage = new CloudinaryStorage({
   cloudinary,
   params: {
@@ -113,64 +180,49 @@ const blogImageStorage = new CloudinaryStorage({
 
 const uploadImage = multer({ storage: blogImageStorage });
 
-/* ================= ROUTES ================= */
+/* ================= BLOG ROUTES ================= */
 
-/* ================= UPLOAD RESOURCE (PDF) ================= */
+/* Upload Resource (PDF) */
 app.post(
   "/api/admin/upload-resource",
   adminOnly,
   uploadResource.single("file"),
   async (req, res) => {
-    try {
-      const { title, description } = req.body;
+    const { title, description } = req.body;
 
-      const blog = await Blog.create({
-        title,
-        description,
-        section: "resources",
-        fileUrl: req.file.path,
-        publicId: req.file.filename,
-        uploadedBy: process.env.ADMIN_EMAIL || "Admin",
-      });
+    const blog = await Blog.create({
+      title,
+      description,
+      section: "resources",
+      fileUrl: req.file.path,
+      publicId: req.file.filename,
+      uploadedBy: process.env.ADMIN_EMAIL,
+    });
 
-      res.json(blog);
-    } catch (err) {
-      console.error("Resource upload error:", err);
-      res.status(500).json({ message: "Upload failed" });
-    }
+    res.json(blog);
   }
 );
 
-/* ================= UPLOAD ALLBLOG (Rich Text) ================= */
+/* Upload AllBlog (Rich Text) */
 app.post(
   "/api/admin/upload-allblog",
   adminOnly,
   async (req, res) => {
-    try {
-      const { title, description, content } = req.body;
+    const { title, description, content } = req.body;
 
-      if (!title || !description || !content)
-        return res
-          .status(400)
-          .json({ message: "Title, description & content required" });
+    const blog = await Blog.create({
+      title,
+      description,
+      content,
+      section: "allblogs",
+      uploadedBy: process.env.ADMIN_EMAIL,
+    });
 
-      const blog = await Blog.create({
-        title,
-        description,
-        content,
-        section: "allblogs",
-        uploadedBy: process.env.ADMIN_EMAIL || "Admin",
-      });
-
-      res.json(blog);
-    } catch (err) {
-      console.error("AllBlog upload error:", err);
-      res.status(500).json({ message: "Upload failed" });
-    }
+    res.json(blog);
   }
 );
 
-/* ================= IMAGE UPLOAD FOR EDITOR ================= */
+/* Upload Blog Image */
 app.post(
   "/api/admin/upload-image",
   adminOnly,
@@ -180,67 +232,46 @@ app.post(
   }
 );
 
-/* ================= GET BLOGS ================= */
+/* Get Blogs */
 app.get("/api/blogs", async (req, res) => {
-  try {
-    const { section } = req.query;
+  const { section } = req.query;
 
-    let filter = {};
-
-    if (section) {
-      filter.$or = [
-        { section: section },
-        { section: { $exists: false } }, // include old blogs
-      ];
-    }
-
-    const blogs = await Blog.find(filter).sort({
-      createdAt: -1,
-    });
-
-    res.json(blogs);
-  } catch (err) {
-    console.error("Fetch error:", err);
-    res.status(500).json({ message: "Failed to fetch blogs" });
+  let filter = {};
+  if (section) {
+    filter.$or = [
+      { section: section },
+      { section: { $exists: false } },
+    ];
   }
+
+  const blogs = await Blog.find(filter).sort({ createdAt: -1 });
+
+  res.json(blogs);
 });
 
-/* ================= GET SINGLE BLOG ================= */
+/* Get Single Blog */
 app.get("/api/blog/:id", async (req, res) => {
-  try {
-    const blog = await Blog.findById(req.params.id);
-    if (!blog)
-      return res.status(404).json({ message: "Blog not found" });
-
-    res.json(blog);
-  } catch (err) {
-    res.status(500).json({ message: "Error fetching blog" });
-  }
+  const blog = await Blog.findById(req.params.id);
+  res.json(blog);
 });
 
-/* ================= DELETE BLOG ================= */
+/* Delete Blog */
 app.delete("/api/admin/blog/:id", adminOnly, async (req, res) => {
-  try {
-    const blog = await Blog.findById(req.params.id);
-    if (!blog)
-      return res.status(404).json({ message: "Not found" });
+  const blog = await Blog.findById(req.params.id);
+  if (!blog)
+    return res.status(404).json({ message: "Not found" });
 
-    if (blog.publicId) {
-      await cloudinary.uploader.destroy(blog.publicId, {
-        resource_type: "raw",
-      });
-    }
-
-    await blog.deleteOne();
-
-    res.json({ message: "Deleted successfully" });
-  } catch (err) {
-    console.error("Delete error:", err);
-    res.status(500).json({ message: "Delete failed" });
+  if (blog.publicId) {
+    await cloudinary.uploader.destroy(blog.publicId, {
+      resource_type: "raw",
+    });
   }
+
+  await blog.deleteOne();
+  res.json({ message: "Deleted successfully" });
 });
 
-/* ================= START SERVER ================= */
+/* ================= START ================= */
 app.listen(PORT, () => {
   console.log(`Server running on ${PORT}`);
 });

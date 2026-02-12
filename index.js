@@ -31,7 +31,7 @@ cloudinary.config({
   api_secret: process.env.CLOUDINARY_API_SECRET,
 });
 
-/* ================= MONGODB (ENV-AGNOSTIC) ================= */
+/* ================= MONGODB ================= */
 mongoose
   .connect(process.env.MONGO_URI, {
     maxPoolSize: Number(process.env.DB_MAX_POOL) || 10,
@@ -43,6 +43,7 @@ mongoose
   .catch((err) => console.error("Mongo error:", err));
 
 /* ================= MODELS ================= */
+
 const User = mongoose.model(
   "User",
   new mongoose.Schema(
@@ -57,17 +58,26 @@ const User = mongoose.model(
   )
 );
 
+/* 🔥 UPDATED BLOG MODEL */
 const Blog = mongoose.model(
   "Blog",
   new mongoose.Schema(
     {
-      title: String,
-      description: String,
+      title: { type: String, required: true },
+      description: { type: String, required: true },
+
       category: {
         type: String,
         enum: ["foundations", "deep"],
+      },
+
+      /* 🔥 NEW FIELD */
+      section: {
+        type: String,
+        enum: ["resources", "allblogs"],
         required: true,
       },
+
       fileUrl: String,
       publicId: String,
       uploadedBy: String,
@@ -98,6 +108,7 @@ const adminOnly = (req, res, next) => {
     if (decoded.role !== "admin") {
       return res.status(403).json({ message: "Admin only" });
     }
+
     next();
   } catch {
     return res.status(401).json({ message: "Invalid token" });
@@ -116,6 +127,7 @@ const storage = new CloudinaryStorage({
 const upload = multer({ storage });
 
 /* ================= ROUTES ================= */
+
 app.get("/", (_, res) => {
   res.send("Prefscale Backend Live 🚀");
 });
@@ -128,12 +140,12 @@ app.post("/api/signup", async (req, res) => {
 
     await User.create({ name, company, email, password: hashed });
     res.json({ message: "Signup successful" });
-  } catch (err) {
+  } catch {
     res.status(400).json({ message: "Email already exists" });
   }
 });
 
-/* ================= LOGIN (STABLE FOR FREE + PAID) ================= */
+/* ================= LOGIN ================= */
 app.post("/api/login", async (req, res) => {
   try {
     const { email, password } = req.body;
@@ -142,7 +154,7 @@ app.post("/api/login", async (req, res) => {
       return res.status(400).json({ message: "Missing credentials" });
     }
 
-    // ADMIN LOGIN
+    /* ADMIN LOGIN */
     if (
       email === process.env.ADMIN_EMAIL &&
       password === process.env.ADMIN_PASSWORD
@@ -153,7 +165,7 @@ app.post("/api/login", async (req, res) => {
       return res.json({ token, role: "admin" });
     }
 
-    // NORMAL USER LOGIN
+    /* USER LOGIN */
     const user = await User.findOne({ email }).lean();
     if (!user) {
       return res.status(400).json({ message: "Invalid credentials" });
@@ -187,9 +199,9 @@ app.post("/api/contact", async (req, res) => {
     }
 
     await Contact.create({ name, company, email, message });
+
     res.json({ message: "Message sent successfully ✅" });
   } catch (err) {
-    console.error("Contact error:", err);
     res.status(500).json({ message: "Failed to send message" });
   }
 });
@@ -200,22 +212,30 @@ app.post(
   adminOnly,
   upload.single("file"),
   async (req, res) => {
-    const { title, description, category } = req.body;
+    try {
+      const { title, description, category, section } = req.body;
 
-    if (!req.file || !category) {
-      return res.status(400).json({ message: "File and category required" });
+      if (!title || !description || !section || !req.file) {
+        return res.status(400).json({
+          message: "Title, description, file and section are required",
+        });
+      }
+
+      const blog = await Blog.create({
+        title,
+        description,
+        category,
+        section, // 🔥 important
+        fileUrl: req.file.path,
+        publicId: req.file.filename,
+        uploadedBy: process.env.ADMIN_EMAIL,
+      });
+
+      res.json(blog);
+    } catch (err) {
+      console.error("Upload error:", err);
+      res.status(500).json({ message: "Upload failed" });
     }
-
-    const blog = await Blog.create({
-      title,
-      description,
-      category,
-      fileUrl: req.file.path,
-      publicId: req.file.filename,
-      uploadedBy: "admin",
-    });
-
-    res.json(blog);
   }
 );
 
@@ -232,18 +252,29 @@ app.delete("/api/admin/blog/:id", adminOnly, async (req, res) => {
     }
 
     await blog.deleteOne();
+
     res.json({ message: "Blog deleted successfully ✅" });
   } catch (err) {
-    console.error("Delete error:", err);
     res.status(500).json({ message: "Delete failed" });
   }
 });
 
 /* ================= GET BLOGS ================= */
 app.get("/api/blogs", async (req, res) => {
-  const filter = req.query.category ? { category: req.query.category } : {};
-  const blogs = await Blog.find(filter).sort({ createdAt: -1 });
-  res.json(blogs);
+  try {
+    const { section, category } = req.query;
+
+    const filter = {};
+
+    if (section) filter.section = section;
+    if (category) filter.category = category;
+
+    const blogs = await Blog.find(filter).sort({ createdAt: -1 });
+
+    res.json(blogs);
+  } catch (err) {
+    res.status(500).json({ message: "Failed to fetch blogs" });
+  }
 });
 
 /* ================= START ================= */

@@ -1,7 +1,6 @@
 /* eslint-disable */
 const express = require("express");
 const cors = require("cors");
-const bcrypt = require("bcryptjs");
 const jwt = require("jsonwebtoken");
 const mongoose = require("mongoose");
 const multer = require("multer");
@@ -19,6 +18,7 @@ app.use(
     allowedHeaders: ["Content-Type", "Authorization"],
   })
 );
+
 app.use(express.json());
 
 const PORT = process.env.PORT || 5000;
@@ -37,7 +37,7 @@ mongoose
   .then(() => console.log("MongoDB connected ✅"))
   .catch((err) => console.error("Mongo error:", err));
 
-/* ================= MODELS ================= */
+/* ================= BLOG MODEL ================= */
 
 const Blog = mongoose.model(
   "Blog",
@@ -45,13 +45,20 @@ const Blog = mongoose.model(
     {
       title: { type: String, required: true },
       description: { type: String, required: true },
+
+      // NEW FIELD FOR RICH CONTENT
+      content: { type: String }, 
+
       section: {
         type: String,
         enum: ["resources", "allblogs"],
         required: true,
       },
-      fileUrl: { type: String, required: true },
-      publicId: { type: String, required: true },
+
+      // Only for resources PDFs
+      fileUrl: String,
+      publicId: String,
+
       uploadedBy: { type: String, required: true },
     },
     { timestamps: true }
@@ -75,23 +82,36 @@ const adminOnly = (req, res, next) => {
   }
 };
 
-/* ================= DYNAMIC STORAGE ================= */
+/* ================= STORAGE FOR RESOURCES ================= */
+const resourceStorage = new CloudinaryStorage({
+  cloudinary,
+  params: {
+    folder: "prefscale/resources",
+    resource_type: "raw",
+    allowed_formats: ["pdf"],
+  },
+});
 
-const createStorage = (folderName) =>
-  new CloudinaryStorage({
-    cloudinary,
-    params: {
-      folder: folderName,
-      resource_type: "raw",
-      allowed_formats: ["pdf"],
-    },
-  });
+const uploadResource = multer({ storage: resourceStorage });
 
-/* ================= RESOURCE UPLOAD ================= */
+/* ================= IMAGE STORAGE FOR BLOG CONTENT ================= */
+const blogImageStorage = new CloudinaryStorage({
+  cloudinary,
+  params: {
+    folder: "prefscale/blog-images",
+    allowed_formats: ["jpg", "png", "jpeg", "webp"],
+  },
+});
+
+const uploadImage = multer({ storage: blogImageStorage });
+
+/* ================= ROUTES ================= */
+
+/* RESOURCE UPLOAD (PDF SYSTEM) */
 app.post(
   "/api/admin/upload-resource",
   adminOnly,
-  multer({ storage: createStorage("prefscale/resources") }).single("file"),
+  uploadResource.single("file"),
   async (req, res) => {
     try {
       const { title, description } = req.body;
@@ -106,27 +126,25 @@ app.post(
       });
 
       res.json(blog);
-    } catch (err) {
+    } catch {
       res.status(500).json({ message: "Upload failed" });
     }
   }
 );
 
-/* ================= ALLBLOG UPLOAD ================= */
+/* ALLBLOG CONTENT UPLOAD (RICH TEXT SYSTEM) */
 app.post(
   "/api/admin/upload-allblog",
   adminOnly,
-  multer({ storage: createStorage("prefscale/allblogs") }).single("file"),
   async (req, res) => {
     try {
-      const { title, description } = req.body;
+      const { title, description, content } = req.body;
 
       const blog = await Blog.create({
         title,
         description,
+        content, // HTML content
         section: "allblogs",
-        fileUrl: req.file.path,
-        publicId: req.file.filename,
         uploadedBy: process.env.ADMIN_EMAIL || "Admin",
       });
 
@@ -137,21 +155,39 @@ app.post(
   }
 );
 
-/* ================= GET BLOGS ================= */
+/* IMAGE UPLOAD FOR RICH TEXT EDITOR */
+app.post(
+  "/api/admin/upload-image",
+  adminOnly,
+  uploadImage.single("image"),
+  (req, res) => {
+    res.json({ url: req.file.path });
+  }
+);
+
+/* GET BLOGS */
 app.get("/api/blogs", async (req, res) => {
   const { section } = req.query;
   const blogs = await Blog.find({ section }).sort({ createdAt: -1 });
   res.json(blogs);
 });
 
-/* ================= DELETE ================= */
+/* GET SINGLE BLOG */
+app.get("/api/blog/:id", async (req, res) => {
+  const blog = await Blog.findById(req.params.id);
+  res.json(blog);
+});
+
+/* DELETE BLOG */
 app.delete("/api/admin/blog/:id", adminOnly, async (req, res) => {
   const blog = await Blog.findById(req.params.id);
   if (!blog) return res.status(404).json({ message: "Not found" });
 
-  await cloudinary.uploader.destroy(blog.publicId, {
-    resource_type: "raw",
-  });
+  if (blog.publicId) {
+    await cloudinary.uploader.destroy(blog.publicId, {
+      resource_type: "raw",
+    });
+  }
 
   await blog.deleteOne();
   res.json({ message: "Deleted successfully" });

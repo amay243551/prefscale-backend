@@ -46,16 +46,15 @@ const Blog = mongoose.model(
       title: { type: String, required: true },
       description: { type: String, required: true },
 
-      // NEW FIELD FOR RICH CONTENT
-      content: { type: String }, 
+      // Rich text content (for allblogs)
+      content: { type: String },
 
       section: {
         type: String,
         enum: ["resources", "allblogs"],
-        required: true,
       },
 
-      // Only for resources PDFs
+      // For resources (PDF)
       fileUrl: String,
       publicId: String,
 
@@ -66,6 +65,7 @@ const Blog = mongoose.model(
 );
 
 /* ================= AUTH ================= */
+
 const adminOnly = (req, res, next) => {
   try {
     const token = req.headers.authorization?.split(" ")[1];
@@ -82,7 +82,9 @@ const adminOnly = (req, res, next) => {
   }
 };
 
-/* ================= STORAGE FOR RESOURCES ================= */
+/* ================= STORAGE CONFIG ================= */
+
+/* PDF STORAGE (Resources) */
 const resourceStorage = new CloudinaryStorage({
   cloudinary,
   params: {
@@ -94,7 +96,7 @@ const resourceStorage = new CloudinaryStorage({
 
 const uploadResource = multer({ storage: resourceStorage });
 
-/* ================= IMAGE STORAGE FOR BLOG CONTENT ================= */
+/* BLOG IMAGE STORAGE (Rich Content Images) */
 const blogImageStorage = new CloudinaryStorage({
   cloudinary,
   params: {
@@ -107,7 +109,7 @@ const uploadImage = multer({ storage: blogImageStorage });
 
 /* ================= ROUTES ================= */
 
-/* RESOURCE UPLOAD (PDF SYSTEM) */
+/* ================= UPLOAD RESOURCE (PDF) ================= */
 app.post(
   "/api/admin/upload-resource",
   adminOnly,
@@ -126,13 +128,14 @@ app.post(
       });
 
       res.json(blog);
-    } catch {
+    } catch (err) {
+      console.error("Resource upload error:", err);
       res.status(500).json({ message: "Upload failed" });
     }
   }
 );
 
-/* ALLBLOG CONTENT UPLOAD (RICH TEXT SYSTEM) */
+/* ================= UPLOAD ALLBLOG (Rich Text) ================= */
 app.post(
   "/api/admin/upload-allblog",
   adminOnly,
@@ -143,19 +146,20 @@ app.post(
       const blog = await Blog.create({
         title,
         description,
-        content, // HTML content
+        content,
         section: "allblogs",
         uploadedBy: process.env.ADMIN_EMAIL || "Admin",
       });
 
       res.json(blog);
     } catch (err) {
+      console.error("AllBlog upload error:", err);
       res.status(500).json({ message: "Upload failed" });
     }
   }
 );
 
-/* IMAGE UPLOAD FOR RICH TEXT EDITOR */
+/* ================= IMAGE UPLOAD FOR EDITOR ================= */
 app.post(
   "/api/admin/upload-image",
   adminOnly,
@@ -165,35 +169,65 @@ app.post(
   }
 );
 
-/* GET BLOGS */
+/* ================= GET BLOGS (FIX FOR OLD DATA) ================= */
 app.get("/api/blogs", async (req, res) => {
-  const { section } = req.query;
-  const blogs = await Blog.find({ section }).sort({ createdAt: -1 });
-  res.json(blogs);
-});
+  try {
+    const { section } = req.query;
 
-/* GET SINGLE BLOG */
-app.get("/api/blog/:id", async (req, res) => {
-  const blog = await Blog.findById(req.params.id);
-  res.json(blog);
-});
+    let filter = {};
 
-/* DELETE BLOG */
-app.delete("/api/admin/blog/:id", adminOnly, async (req, res) => {
-  const blog = await Blog.findById(req.params.id);
-  if (!blog) return res.status(404).json({ message: "Not found" });
+    if (section) {
+      filter.$or = [
+        { section: section },
+        { section: { $exists: false } }, // 🔥 SHOW OLD BLOGS TOO
+      ];
+    }
 
-  if (blog.publicId) {
-    await cloudinary.uploader.destroy(blog.publicId, {
-      resource_type: "raw",
-    });
+    const blogs = await Blog.find(filter).sort({ createdAt: -1 });
+
+    res.json(blogs);
+  } catch (err) {
+    console.error("Fetch error:", err);
+    res.status(500).json({ message: "Failed to fetch blogs" });
   }
-
-  await blog.deleteOne();
-  res.json({ message: "Deleted successfully" });
 });
 
-/* ================= START ================= */
+/* ================= GET SINGLE BLOG ================= */
+app.get("/api/blog/:id", async (req, res) => {
+  try {
+    const blog = await Blog.findById(req.params.id);
+    if (!blog)
+      return res.status(404).json({ message: "Blog not found" });
+
+    res.json(blog);
+  } catch {
+    res.status(500).json({ message: "Error fetching blog" });
+  }
+});
+
+/* ================= DELETE BLOG ================= */
+app.delete("/api/admin/blog/:id", adminOnly, async (req, res) => {
+  try {
+    const blog = await Blog.findById(req.params.id);
+    if (!blog)
+      return res.status(404).json({ message: "Not found" });
+
+    if (blog.publicId) {
+      await cloudinary.uploader.destroy(blog.publicId, {
+        resource_type: "raw",
+      });
+    }
+
+    await blog.deleteOne();
+
+    res.json({ message: "Deleted successfully" });
+  } catch (err) {
+    console.error("Delete error:", err);
+    res.status(500).json({ message: "Delete failed" });
+  }
+});
+
+/* ================= START SERVER ================= */
 app.listen(PORT, () => {
   console.log(`Server running on ${PORT}`);
 });

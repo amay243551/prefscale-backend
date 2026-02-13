@@ -26,7 +26,7 @@ app.use(express.json());
 const PORT = process.env.PORT || 5000;
 const JWT_SECRET = process.env.JWT_SECRET;
 
-/* ================= HEALTH CHECK ================= */
+/* ================= HEALTH ================= */
 
 app.get("/", (req, res) => {
   res.send("Prefscale Backend Running 🚀");
@@ -40,7 +40,7 @@ cloudinary.config({
   api_secret: process.env.CLOUDINARY_API_SECRET,
 });
 
-/* ================= MONGODB ================= */
+/* ================= MONGO ================= */
 
 mongoose
   .connect(process.env.MONGO_URI)
@@ -69,12 +69,18 @@ const Blog = mongoose.model(
     {
       title: { type: String, required: true },
       description: { type: String, required: true },
-      content: { type: String },
+      content: String,
 
       section: {
         type: String,
         enum: ["resources", "allblogs"],
         required: true,
+      },
+
+      // ✅ NEW FIELD (IMPORTANT)
+      category: {
+        type: String,
+        enum: ["foundations", "deepdive"],
       },
 
       fileUrl: String,
@@ -89,7 +95,7 @@ const Blog = mongoose.model(
   )
 );
 
-/* ================= AUTH MIDDLEWARE ================= */
+/* ================= ADMIN MIDDLEWARE ================= */
 
 const adminOnly = (req, res, next) => {
   try {
@@ -108,9 +114,8 @@ const adminOnly = (req, res, next) => {
   }
 };
 
-/* ================= AUTH ROUTES ================= */
+/* ================= AUTH ================= */
 
-/* SIGNUP */
 app.post("/api/signup", async (req, res) => {
   try {
     const { name, company, email, password } = req.body;
@@ -121,25 +126,18 @@ app.post("/api/signup", async (req, res) => {
 
     const hashed = await bcrypt.hash(password, 10);
 
-    await User.create({
-      name,
-      company,
-      email,
-      password: hashed,
-    });
+    await User.create({ name, company, email, password: hashed });
 
     res.json({ message: "Signup successful" });
-  } catch (err) {
+  } catch {
     res.status(500).json({ message: "Signup failed" });
   }
 });
 
-/* LOGIN */
 app.post("/api/login", async (req, res) => {
   try {
     const { email, password } = req.body;
 
-    /* ADMIN LOGIN */
     if (
       email === process.env.ADMIN_EMAIL &&
       password === process.env.ADMIN_PASSWORD
@@ -151,8 +149,7 @@ app.post("/api/login", async (req, res) => {
       return res.json({ token, role: "admin" });
     }
 
-    /* USER LOGIN */
-    const user = await User.findOne({ email }); // ✅ FIXED SYNTAX
+    const user = await User.findOne({ email });
     if (!user)
       return res.status(400).json({ message: "Invalid credentials" });
 
@@ -197,18 +194,19 @@ const uploadImage = multer({ storage: blogImageStorage });
 
 /* ================= BLOG ROUTES ================= */
 
-/* Upload Resource (PDF) */
+/* Upload Resource */
 app.post(
   "/api/admin/upload-resource",
   adminOnly,
   uploadResource.single("file"),
   async (req, res) => {
     try {
-      const { title, description } = req.body;
+      const { title, description, category } = req.body;
 
       const blog = await Blog.create({
         title,
         description,
+        category, // ✅ SAVED NOW
         section: "resources",
         fileUrl: req.file.path,
         publicId: req.file.filename,
@@ -216,13 +214,14 @@ app.post(
       });
 
       res.json(blog);
-    } catch {
+    } catch (err) {
+      console.error(err);
       res.status(500).json({ message: "Upload failed" });
     }
   }
 );
 
-/* Upload AllBlog */
+/* Upload Blog */
 app.post(
   "/api/admin/upload-allblog",
   adminOnly,
@@ -256,8 +255,7 @@ app.post(
   }
 );
 
-/* ================= LIKE ROUTE (OPTIMIZED) ================= */
-
+/* Like Blog */
 app.post("/api/blog/:id/like", async (req, res) => {
   try {
     const blog = await Blog.findByIdAndUpdate(
@@ -267,10 +265,10 @@ app.post("/api/blog/:id/like", async (req, res) => {
     );
 
     if (!blog)
-      return res.status(404).json({ message: "Blog not found" });
+      return res.status(404).json({ message: "Not found" });
 
     res.json(blog);
-  } catch (err) {
+  } catch {
     res.status(500).json({ message: "Like failed" });
   }
 });
@@ -278,18 +276,21 @@ app.post("/api/blog/:id/like", async (req, res) => {
 /* Get Blogs */
 app.get("/api/blogs", async (req, res) => {
   try {
-    const { section } = req.query;
-    const filter = section ? { section } : {};
+    const { section, category } = req.query;
+
+    let filter = {};
+    if (section) filter.section = section;
+    if (category) filter.category = category;
 
     const blogs = await Blog.find(filter).sort({ createdAt: -1 });
 
     res.json(blogs);
   } catch {
-    res.status(500).json({ message: "Failed to fetch blogs" });
+    res.status(500).json({ message: "Fetch failed" });
   }
 });
 
-/* Get Single Blog */
+/* Get Single */
 app.get("/api/blog/:id", async (req, res) => {
   try {
     const blog = await Blog.findById(req.params.id);
@@ -302,7 +303,7 @@ app.get("/api/blog/:id", async (req, res) => {
   }
 });
 
-/* Delete Blog */
+/* Delete */
 app.delete("/api/admin/blog/:id", adminOnly, async (req, res) => {
   try {
     const blog = await Blog.findById(req.params.id);
@@ -316,6 +317,7 @@ app.delete("/api/admin/blog/:id", adminOnly, async (req, res) => {
     }
 
     await blog.deleteOne();
+
     res.json({ message: "Deleted successfully" });
   } catch {
     res.status(500).json({ message: "Delete failed" });

@@ -12,6 +12,7 @@ require("dotenv").config();
 const app = express();
 
 /* ================= MIDDLEWARE ================= */
+
 app.use(
   cors({
     origin: "*",
@@ -25,12 +26,14 @@ app.use(express.json());
 const PORT = process.env.PORT || 5000;
 const JWT_SECRET = process.env.JWT_SECRET;
 
-/* ================= HEALTH ROUTE ================= */
+/* ================= HEALTH CHECK ================= */
+
 app.get("/", (req, res) => {
   res.send("Prefscale Backend Running 🚀");
 });
 
 /* ================= CLOUDINARY ================= */
+
 cloudinary.config({
   cloud_name: process.env.CLOUDINARY_CLOUD_NAME,
   api_key: process.env.CLOUDINARY_API_KEY,
@@ -38,6 +41,7 @@ cloudinary.config({
 });
 
 /* ================= MONGODB ================= */
+
 mongoose
   .connect(process.env.MONGO_URI)
   .then(() => console.log("MongoDB connected ✅"))
@@ -148,7 +152,7 @@ app.post("/api/login", async (req, res) => {
     }
 
     /* USER LOGIN */
-    const user = await User.findOne({ email);
+    const user = await User.findOne({ email }); // ✅ FIXED SYNTAX
     if (!user)
       return res.status(400).json({ message: "Invalid credentials" });
 
@@ -218,7 +222,7 @@ app.post(
   }
 );
 
-/* Upload AllBlog (Rich Text) */
+/* Upload AllBlog */
 app.post(
   "/api/admin/upload-allblog",
   adminOnly,
@@ -252,19 +256,22 @@ app.post(
   }
 );
 
-/* LIKE BLOG */
+/* ================= LIKE ROUTE (OPTIMIZED) ================= */
+
 app.post("/api/blog/:id/like", async (req, res) => {
   try {
-    const blog = await Blog.findById(req.params.id);
+    const blog = await Blog.findByIdAndUpdate(
+      req.params.id,
+      { $inc: { likes: 1 } },
+      { new: true }
+    );
+
     if (!blog)
       return res.status(404).json({ message: "Blog not found" });
 
-    blog.likes += 1;
-    await blog.save();
-
-    res.json({ likes: blog.likes });
-  } catch {
-    res.status(500).json({ message: "Failed to like blog" });
+    res.json(blog);
+  } catch (err) {
+    res.status(500).json({ message: "Like failed" });
   }
 });
 
@@ -272,7 +279,6 @@ app.post("/api/blog/:id/like", async (req, res) => {
 app.get("/api/blogs", async (req, res) => {
   try {
     const { section } = req.query;
-
     const filter = section ? { section } : {};
 
     const blogs = await Blog.find(filter).sort({ createdAt: -1 });
@@ -310,7 +316,6 @@ app.delete("/api/admin/blog/:id", adminOnly, async (req, res) => {
     }
 
     await blog.deleteOne();
-
     res.json({ message: "Deleted successfully" });
   } catch {
     res.status(500).json({ message: "Delete failed" });
@@ -318,6 +323,7 @@ app.delete("/api/admin/blog/:id", adminOnly, async (req, res) => {
 });
 
 /* ================= START ================= */
+
 app.listen(PORT, () => {
   console.log(`Server running on ${PORT}`);
 });

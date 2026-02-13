@@ -65,26 +65,25 @@ const Blog = mongoose.model(
     {
       title: { type: String, required: true },
       description: { type: String, required: true },
-
       content: { type: String },
 
       section: {
         type: String,
         enum: ["resources", "allblogs"],
+        required: true,
       },
 
       fileUrl: String,
       publicId: String,
 
-      thumbnail: String, // ✅ NEW
-      likes: { type: Number, default: 0 }, // ✅ NEW
+      thumbnail: String,
+      likes: { type: Number, default: 0 },
 
       uploadedBy: { type: String, required: true },
     },
     { timestamps: true }
   )
 );
-
 
 /* ================= AUTH MIDDLEWARE ================= */
 
@@ -112,6 +111,10 @@ app.post("/api/signup", async (req, res) => {
   try {
     const { name, company, email, password } = req.body;
 
+    const existing = await User.findOne({ email });
+    if (existing)
+      return res.status(400).json({ message: "Email already exists" });
+
     const hashed = await bcrypt.hash(password, 10);
 
     await User.create({
@@ -123,7 +126,7 @@ app.post("/api/signup", async (req, res) => {
 
     res.json({ message: "Signup successful" });
   } catch (err) {
-    res.status(400).json({ message: "Email already exists" });
+    res.status(500).json({ message: "Signup failed" });
   }
 });
 
@@ -145,7 +148,7 @@ app.post("/api/login", async (req, res) => {
     }
 
     /* USER LOGIN */
-    const user = await User.findOne({ email });
+    const user = await User.findOne({ email);
     if (!user)
       return res.status(400).json({ message: "Invalid credentials" });
 
@@ -196,18 +199,22 @@ app.post(
   adminOnly,
   uploadResource.single("file"),
   async (req, res) => {
-    const { title, description } = req.body;
+    try {
+      const { title, description } = req.body;
 
-    const blog = await Blog.create({
-      title,
-      description,
-      section: "resources",
-      fileUrl: req.file.path,
-      publicId: req.file.filename,
-      uploadedBy: process.env.ADMIN_EMAIL,
-    });
+      const blog = await Blog.create({
+        title,
+        description,
+        section: "resources",
+        fileUrl: req.file.path,
+        publicId: req.file.filename,
+        uploadedBy: process.env.ADMIN_EMAIL,
+      });
 
-    res.json(blog);
+      res.json(blog);
+    } catch {
+      res.status(500).json({ message: "Upload failed" });
+    }
   }
 );
 
@@ -216,17 +223,22 @@ app.post(
   "/api/admin/upload-allblog",
   adminOnly,
   async (req, res) => {
-    const { title, description, content } = req.body;
+    try {
+      const { title, description, content, thumbnail } = req.body;
 
-    const blog = await Blog.create({
-      title,
-      description,
-      content,
-      section: "allblogs",
-      uploadedBy: process.env.ADMIN_EMAIL,
-    });
+      const blog = await Blog.create({
+        title,
+        description,
+        content,
+        thumbnail,
+        section: "allblogs",
+        uploadedBy: process.env.ADMIN_EMAIL,
+      });
 
-    res.json(blog);
+      res.json(blog);
+    } catch {
+      res.status(500).json({ message: "Upload failed" });
+    }
   }
 );
 
@@ -240,47 +252,69 @@ app.post(
   }
 );
 
+/* LIKE BLOG */
+app.post("/api/blog/:id/like", async (req, res) => {
+  try {
+    const blog = await Blog.findById(req.params.id);
+    if (!blog)
+      return res.status(404).json({ message: "Blog not found" });
+
+    blog.likes += 1;
+    await blog.save();
+
+    res.json({ likes: blog.likes });
+  } catch {
+    res.status(500).json({ message: "Failed to like blog" });
+  }
+});
+
 /* Get Blogs */
 app.get("/api/blogs", async (req, res) => {
   try {
     const { section } = req.query;
 
-    let filter = {};
-
-    if (section) {
-      filter.section = section; // 🔥 STRICT FILTER
-    }
+    const filter = section ? { section } : {};
 
     const blogs = await Blog.find(filter).sort({ createdAt: -1 });
 
     res.json(blogs);
-  } catch (err) {
-    console.error("Fetch error:", err);
+  } catch {
     res.status(500).json({ message: "Failed to fetch blogs" });
   }
 });
 
-
 /* Get Single Blog */
 app.get("/api/blog/:id", async (req, res) => {
-  const blog = await Blog.findById(req.params.id);
-  res.json(blog);
+  try {
+    const blog = await Blog.findById(req.params.id);
+    if (!blog)
+      return res.status(404).json({ message: "Not found" });
+
+    res.json(blog);
+  } catch {
+    res.status(500).json({ message: "Fetch failed" });
+  }
 });
 
 /* Delete Blog */
 app.delete("/api/admin/blog/:id", adminOnly, async (req, res) => {
-  const blog = await Blog.findById(req.params.id);
-  if (!blog)
-    return res.status(404).json({ message: "Not found" });
+  try {
+    const blog = await Blog.findById(req.params.id);
+    if (!blog)
+      return res.status(404).json({ message: "Not found" });
 
-  if (blog.publicId) {
-    await cloudinary.uploader.destroy(blog.publicId, {
-      resource_type: "raw",
-    });
+    if (blog.publicId) {
+      await cloudinary.uploader.destroy(blog.publicId, {
+        resource_type: "raw",
+      });
+    }
+
+    await blog.deleteOne();
+
+    res.json({ message: "Deleted successfully" });
+  } catch {
+    res.status(500).json({ message: "Delete failed" });
   }
-
-  await blog.deleteOne();
-  res.json({ message: "Deleted successfully" });
 });
 
 /* ================= START ================= */

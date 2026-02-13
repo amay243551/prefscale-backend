@@ -234,20 +234,24 @@ app.post(
 
 /* Get Blogs */
 app.get("/api/blogs", async (req, res) => {
-  const { section } = req.query;
+  try {
+    const { section } = req.query;
 
-  let filter = {};
-  if (section) {
-    filter.$or = [
-      { section: section },
-      { section: { $exists: false } },
-    ];
+    let filter = {};
+
+    if (section) {
+      filter.section = section; // 🔥 STRICT FILTER
+    }
+
+    const blogs = await Blog.find(filter).sort({ createdAt: -1 });
+
+    res.json(blogs);
+  } catch (err) {
+    console.error("Fetch error:", err);
+    res.status(500).json({ message: "Failed to fetch blogs" });
   }
-
-  const blogs = await Blog.find(filter).sort({ createdAt: -1 });
-
-  res.json(blogs);
 });
+
 
 /* Get Single Blog */
 app.get("/api/blog/:id", async (req, res) => {

@@ -65,18 +65,26 @@ const Blog = mongoose.model(
     {
       title: { type: String, required: true },
       description: { type: String, required: true },
-      content: String,
+
+      content: { type: String },
+
       section: {
         type: String,
         enum: ["resources", "allblogs"],
       },
+
       fileUrl: String,
       publicId: String,
-      uploadedBy: String,
+
+      thumbnail: String, // ✅ NEW
+      likes: { type: Number, default: 0 }, // ✅ NEW
+
+      uploadedBy: { type: String, required: true },
     },
     { timestamps: true }
   )
 );
+
 
 /* ================= AUTH MIDDLEWARE ================= */
 

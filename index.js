@@ -95,6 +95,23 @@ const Blog = mongoose.model(
   )
 );
 
+
+/* ================= CONTACT MODEL ================= */
+
+const Contact = mongoose.model(
+  "Contact",
+  new mongoose.Schema(
+    {
+      name: { type: String, required: true },
+      company: String,
+      email: { type: String, required: true },
+      message: { type: String, required: true },
+    },
+    { timestamps: true }
+  )
+);
+
+
 /* ================= ADMIN MIDDLEWARE ================= */
 
 const adminOnly = (req, res, next) => {
@@ -168,6 +185,26 @@ app.post("/api/login", async (req, res) => {
     res.status(500).json({ message: "Login failed" });
   }
 });
+
+/* ================= CONTACT ROUTE ================= */
+
+app.post("/api/contact", async (req, res) => {
+  try {
+    const { name, company, email, message } = req.body;
+
+    if (!name || !email || !message) {
+      return res.status(400).json({ message: "Please fill all required fields" });
+    }
+
+    await Contact.create({ name, company, email, message });
+
+    res.json({ message: "Message sent successfully ✅" });
+  } catch (err) {
+    console.error("Contact error:", err);
+    res.status(500).json({ message: "Something went wrong" });
+  }
+});
+
 
 /* ================= STORAGE ================= */
 

@@ -118,6 +118,23 @@ const Contact = mongoose.model(
   )
 );
 
+/* ================= CHAT MODEL ================= */
+
+const Chat = mongoose.model(
+  "Chat",
+  new mongoose.Schema(
+    {
+      userId: { type: mongoose.Schema.Types.ObjectId, ref: "User" },
+      messages: [
+        {
+          role: String,
+          text: String,
+        },
+      ],
+    },
+    { timestamps: true }
+  )
+);
 
 /* ================= ADMIN MIDDLEWARE ================= */
 
@@ -137,6 +154,23 @@ const adminOnly = (req, res, next) => {
     return res.status(401).json({ message: "Invalid token" });
   }
 };
+
+/* ================= AUTH USER MIDDLEWARE ================= */
+
+const authUser = (req, res, next) => {
+  try {
+    const token = req.headers.authorization?.split(" ")[1];
+    if (!token) return res.status(401).json({ message: "No token" });
+
+    const decoded = jwt.verify(token, JWT_SECRET);
+    req.userId = decoded.id;
+
+    next();
+  } catch {
+    return res.status(401).json({ message: "Invalid token" });
+  }
+};
+
 
 /* ================= AUTH ================= */
 
@@ -368,11 +402,21 @@ app.delete("/api/admin/blog/:id", adminOnly, async (req, res) => {
   }
 });
 
+/* ================= AI HISTORY ROUTE ================= */
+
+app.get("/api/ai/history", authUser, async (req, res) => {
+  try {
+    const chat = await Chat.findOne({ userId: req.userId });
+    res.json({ messages: chat ? chat.messages : [] });
+  } catch {
+    res.status(500).json({ message: "Failed to load history" });
+  }
+});
 
 
 /* ================= AI ROUTE ================= */ // ✅ ADDED
 
-app.post("/api/ai/ask", async (req, res) => {
+app.post("/api/ai/ask", authUser, async (req, res) => {
   try {
     const { message } = req.body;
 
@@ -380,46 +424,47 @@ app.post("/api/ai/ask", async (req, res) => {
       return res.status(400).json({ message: "Message is required" });
     }
 
-    const completion = await groq.chat.completions.create({
-      model: "llama-3.3-70b-versatile",
-      messages: [
-        {
-          role: "system",
-         content: `
-You are Prefscale AI Assistant.
+const chat = await Chat.findOne({ userId: req.userId });
+const previousMessages = chat ? chat.messages : [];
 
-You ONLY answer questions related to:
-- Software Testing
-- Performance Testing
-- Load Testing
-- Stress Testing
-- API Testing
-- Automation Testing
-- QA Tools
-- Prefscale services
-- Prefscale website content
-
-If the user asks anything outside these topics,
-reply with:
-"I can only answer questions related to software testing and Prefscale services."
+const completion = await groq.chat.completions.create({
+  model: "llama-3.3-70b-versatile",
+  messages: [
+    {
+      role: "system",
+      content: `
+You are Prefscale AI Assistant specialized in software testing and Prefscale services.
 `,
-        },
-        {
-          role: "user",
-          content: message,
-        },
-      ],
-    });
-
-    res.json({
-      reply: completion.choices[0]?.message?.content,
-    });
-  } catch (error) {
-    console.error("AI Error:", error);
-    res.status(500).json({ message: "AI failed" });
-  }
+    },
+    ...previousMessages.map((msg) => ({
+      role: msg.role,
+      content: msg.text,
+    })),
+    {
+      role: "user",
+      content: message,
+    },
+  ],
 });
 
+const reply = completion.choices[0]?.message?.content;
+
+const updatedMessages = [
+  ...previousMessages,
+  { role: "user", text: message },
+  { role: "assistant", text: reply },
+];
+
+if (chat) {
+  chat.messages = updatedMessages;
+  await chat.save();
+} else {
+  await Chat.create({
+    userId: req.userId,
+    messages: updatedMessages,
+  });
+}
+res.json({ reply });
 
 /* ================= START ================= */
 

@@ -8,6 +8,7 @@ const multer = require("multer");
 const cloudinary = require("cloudinary").v2;
 const { CloudinaryStorage } = require("multer-storage-cloudinary");
 require("dotenv").config();
+const Groq = require("groq-sdk"); // ✅ ADDED
 
 const app = express();
 
@@ -25,6 +26,12 @@ app.use(express.json());
 
 const PORT = process.env.PORT || 5000;
 const JWT_SECRET = process.env.JWT_SECRET;
+
+/* ================= AI SETUP ================= */ // ✅ ADDED
+
+const groq = new Groq({
+  apiKey: process.env.GROQ_API_KEY,
+});
 
 /* ================= HEALTH ================= */
 
@@ -360,6 +367,43 @@ app.delete("/api/admin/blog/:id", adminOnly, async (req, res) => {
     res.status(500).json({ message: "Delete failed" });
   }
 });
+
+
+
+/* ================= AI ROUTE ================= */ // ✅ ADDED
+
+app.post("/api/ai/ask", async (req, res) => {
+  try {
+    const { message } = req.body;
+
+    if (!message) {
+      return res.status(400).json({ message: "Message is required" });
+    }
+
+    const completion = await groq.chat.completions.create({
+      model: "llama3-8b-8192",
+      messages: [
+        {
+          role: "system",
+          content:
+            "You are Prefscale AI assistant. Only answer about performance testing, load testing, QA tools and Prefscale services.",
+        },
+        {
+          role: "user",
+          content: message,
+        },
+      ],
+    });
+
+    res.json({
+      reply: completion.choices[0]?.message?.content,
+    });
+  } catch (error) {
+    console.error("AI Error:", error);
+    res.status(500).json({ message: "AI failed" });
+  }
+});
+
 
 /* ================= START ================= */
 

@@ -413,8 +413,7 @@ app.get("/api/ai/history", authUser, async (req, res) => {
   }
 });
 
-
-/* ================= AI ROUTE ================= */ // ✅ ADDED
+/* ================= AI ROUTE ================= */
 
 app.post("/api/ai/ask", authUser, async (req, res) => {
   try {
@@ -424,47 +423,53 @@ app.post("/api/ai/ask", authUser, async (req, res) => {
       return res.status(400).json({ message: "Message is required" });
     }
 
-const chat = await Chat.findOne({ userId: req.userId });
-const previousMessages = chat ? chat.messages : [];
+    const chat = await Chat.findOne({ userId: req.userId });
+    const previousMessages = chat ? chat.messages : [];
 
-const completion = await groq.chat.completions.create({
-  model: "llama-3.3-70b-versatile",
-  messages: [
-    {
-      role: "system",
-      content: `
-You are Prefscale AI Assistant specialized in software testing and Prefscale services.
-`,
-    },
-    ...previousMessages.map((msg) => ({
-      role: msg.role,
-      content: msg.text,
-    })),
-    {
-      role: "user",
-      content: message,
-    },
-  ],
+    const completion = await groq.chat.completions.create({
+      model: "llama-3.3-70b-versatile",
+      messages: [
+        {
+          role: "system",
+          content:
+            "You are Prefscale AI Assistant specialized in software testing and Prefscale services.",
+        },
+        ...previousMessages.map((msg) => ({
+          role: msg.role,
+          content: msg.text,
+        })),
+        {
+          role: "user",
+          content: message,
+        },
+      ],
+    });
+
+    const reply = completion.choices[0]?.message?.content;
+
+    const updatedMessages = [
+      ...previousMessages,
+      { role: "user", text: message },
+      { role: "assistant", text: reply },
+    ];
+
+    if (chat) {
+      chat.messages = updatedMessages;
+      await chat.save();
+    } else {
+      await Chat.create({
+        userId: req.userId,
+        messages: updatedMessages,
+      });
+    }
+
+    res.json({ reply });
+
+  } catch (error) {
+    console.error("AI Error:", error);
+    res.status(500).json({ message: "AI failed" });
+  }
 });
-
-const reply = completion.choices[0]?.message?.content;
-
-const updatedMessages = [
-  ...previousMessages,
-  { role: "user", text: message },
-  { role: "assistant", text: reply },
-];
-
-if (chat) {
-  chat.messages = updatedMessages;
-  await chat.save();
-} else {
-  await Chat.create({
-    userId: req.userId,
-    messages: updatedMessages,
-  });
-}
-res.json({ reply });
 
 /* ================= START ================= */
 
